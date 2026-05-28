@@ -1,0 +1,31 @@
+[build-system]
+
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ane_moe"
+version = " 1.0.0"
+description = "MoE on ANE"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "kamisori-daijin" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "torch>=2.10.0",
+    "transformers>=5.0.0",
+    "coremltools>=8.3.0",
+]
+
+
