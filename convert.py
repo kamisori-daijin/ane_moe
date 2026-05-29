@@ -82,15 +82,13 @@ def run_pipeline_from_hf_cache(model_id, output_workspace="coreml_experts_worksp
                 
                 if has_gate_up and has_down:
                     print(f"  [Loader Success] All component matrices assembled into local dictionary.")
-                    ）
+                
                     convert_all_experts_to_coreml_fp16_lut4(
                         hf_state_dict=layer_state_dict,
                         model_config=config,
                         layer_idx=layer_idx,
                         output_dir=output_workspace,
-                        batch_size=1,
-                        seq_len=512,
-                        top_k=8,
+                        tokens_per_expert=1,
                         lut_bits=4
                     )
                 else:
@@ -113,9 +111,7 @@ def run_pipeline_from_hf_cache(model_id, output_workspace="coreml_experts_worksp
                 model_config=config,
                 layer_idx=layer_idx,
                 output_dir=output_workspace,
-                batch_size=1,
-                seq_len=512,
-                top_k=8,
+                tokens_per_expert=1,
                 lut_bits=4
             )
 
