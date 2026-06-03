@@ -4,3 +4,5 @@
 gemma-4-26B-A4B-it/
 __pycache__
 coreml_experts/
+.DS_Store
+coreml_attentions/
