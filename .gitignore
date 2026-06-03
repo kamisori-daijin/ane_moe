@@ -8,3 +8,4 @@ coreml_experts/
 coreml_attentions/
 coreml_routers/
 coreml_rope/
+coreml_mlps/
