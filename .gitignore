@@ -9,3 +9,4 @@ coreml_attentions/
 coreml_routers/
 coreml_rope/
 coreml_mlps/
+coreml_norms/
