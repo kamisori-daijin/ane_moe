@@ -11,3 +11,4 @@ coreml_rope/
 coreml_mlps/
 coreml_norms/
 coreml_lm_head/
+embedding_binary/
