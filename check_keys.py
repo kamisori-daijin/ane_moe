@@ -69,3 +69,36 @@ def inspect_hf_cache_keys(model_id="Qwen/Qwen3.5-35B-A3B"):
 if __name__ == "__main__":
     
     inspect_hf_cache_keys("Qwen/Qwen3.5-35B-A3B")
+
+
+
+import json
+import os
+import glob
+
+
+home_dir = os.path.expanduser("~")
+base_cache_path = os.path.join(home_dir, ".cache", "huggingface", "hub", "models--Qwen--Qwen3.5-35B-A3B", "snapshots")
+snapshot_path = sorted(glob.glob(os.path.join(base_cache_path, "*")))[-1]
+index_json_path = os.path.join(snapshot_path, "model.safetensors.index.json")
+
+print(f"Checking index json: {index_json_path}")
+with open(index_json_path, "r") as f:
+    index_data = json.load(f)
+
+weight_map = index_data["weight_map"]
+
+
+print("\n--- Real Keys for Layer 27 ---")
+found_any = False
+for key in weight_map.keys():
+    if "layers.27." in key and ("router" in key.lower() or "gate" in key.lower() or "proj" in key.lower()):
+        print(f"Found Key: {key}")
+        found_any = True
+
+if not found_any:
+    print("No matching keys found at all. Printing top 5 generic keys for layer 27:")
+    sample = [k for k in weight_map.keys() if "layers.27." in k][:5]
+    for s in sample:
+        print(f"Generic Key: {s}")
+    
