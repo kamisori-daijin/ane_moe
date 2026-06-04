@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 出力先フォルダを完全固定
+
 DEST_WORKSPACE="compiled_model"
 mkdir -p "$DEST_WORKSPACE"
 
