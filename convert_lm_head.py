@@ -2,85 +2,120 @@ import os
 import json
 import glob
 import torch
+import torch.nn as nn
 import numpy as np
 import coremltools as ct
 from transformers import AutoConfig
 from safetensors.torch import load_file
 
-def convert_lm_head_to_coreml(model_id="Qwen/Qwen3.5-35B-A3B", output_dir="coreml_lm_head"):
+class Qwen3_5MoeSplitLMHeadANE(nn.Module):
     """
-    The final factory script to serialize Qwen3.5-35B-A3B's outermost 248,320-dimensional lm_head,
-    explicitly targeting CPU_AND_GPU (primarily GPU execution).
+    16-split 1x1 Conv2d LM_Head optimized for Apple Neural Engine (ANE).
+    Splits the huge 240k vocabulary dimension into 16 balanced chunks to maximize GPU/ANE parallelism.
     """
+    def __init__(self, hidden_dim, vocab_size):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.vocab_size = vocab_size
+        
+        # Calculate split sizes and handle remaining dimensions
+        self.vocab_split = vocab_size // 16
+        self.vocab_remainder = vocab_size % 16
+        
+        # Dynamically register 16 independent 1x1 Conv2d layers
+        self.heads = nn.ModuleList()
+        for i in range(16):
+            split_size = self.vocab_split + (1 if i < self.vocab_remainder else 0)
+            # Defined as 1x1 Conv2d to fit the 4D layout required by ANE
+            self.heads.append(nn.Conv2d(hidden_dim, split_size, kernel_size=1, bias=False))
+
+    def forward(self, x_4d: torch.Tensor) -> list[torch.Tensor]:
+        # Input x_4d: 4D tensor [1, hidden_dim, 1, 1] received from the DecoderLayer
+        
+        # Compute output slices from the 16 heads and return as a list
+        outputs = []
+        for i in range(16):
+            outputs.append(self.heads[i](x_4d))
+        return outputs
+
+
+def convert_split_lm_head_to_coreml(model_id="Qwen/Qwen3.5-35B-A3B", output_dir="coreml_lm_head_split"):
     os.makedirs(output_dir, exist_ok=True)
     home_dir = os.path.expanduser("~")
     formatted_model_id = f"models--{model_id.replace('/', '--')}"
     base_cache_path = os.path.join(home_dir, ".cache", "huggingface", "hub", formatted_model_id, "snapshots")
+    snapshot_path = sorted(glob.glob(os.path.join(base_cache_path, "*")))[-1]
     
-    if not os.path.exists(base_cache_path):
-        raise FileNotFoundError(f"Could not find model cache paths at: {base_cache_path}")
-        
-    snapshots = glob.glob(os.path.join(base_cache_path, "*"))
-    snapshot_path = sorted(snapshots)[-1]
-    
-    print(f"[HF Cache] Loading configuration profile for final projection layer...")
     global_config = AutoConfig.from_pretrained(snapshot_path)
     config = global_config.text_config if hasattr(global_config, "text_config") else global_config
     if isinstance(config, dict):
         from transformers import Qwen3_5MoeTextConfig
         config = Qwen3_5MoeTextConfig(**config)
         
-    hidden_dim = config.hidden_size # 2048 or 4096 depending on the configuration
-    vocab_size = config.vocab_size  # Fixed at 248,320
+    hidden_dim = config.hidden_size
+    vocab_size = config.vocab_size
 
-    print(f"\n[LM Head] Instantiating Final Linear projection layer => [{hidden_dim} -> {vocab_size}]")
- 
-    lm_head = torch.nn.Linear(hidden_dim, vocab_size, bias=False)
+    # 1. Initialize the 16-split model
+    split_lm_head = Qwen3_5MoeSplitLMHeadANE(hidden_dim, vocab_size)
     
-    # Pinpoint and trace the outermost lm_head weights from safetensors
+    # 2. Load the monolithic lm_head.weight from safetensors and slice it into 16 parts
     index_json_path = os.path.join(snapshot_path, "model.safetensors.index.json")
     with open(index_json_path, "r") as f:
         weight_map = json.load(f)["weight_map"]
         
-    filename = weight_map["lm_head.weight"]
-    full_safetensors_path = os.path.join(snapshot_path, filename)
-    
-    print(f"  [Stream] Extracting final bytes block: {filename}")
+    full_path = os.path.join(snapshot_path, weight_map["lm_head.weight"])
+    print(f"[LM Head Split] Extracting mega-weight and chunking into 16 parts...")
+    full_weight = load_file(full_path)["lm_head.weight"] # Shape: [248320, hidden_dim]
     
     with torch.no_grad():
-        lm_head.weight.copy_(load_file(full_safetensors_path)["lm_head.weight"])
-        print("  [Weight Loader] Final token projection weight matrices bound successfully.")
+        start_idx = 0
+        for i in range(16):
+            split_size = split_lm_head.vocab_split + (1 if i < split_lm_head.vocab_remainder else 0)
+            end_idx = start_idx + split_size
+            
+            # Slice the target chunk (~15,520ch) and reshape to 4D [SplitSize, HiddenDim, 1, 1]
+            chunk_w = full_weight[start_idx:end_idx, :].unsqueeze(-1).unsqueeze(-1)
+            split_lm_head.heads[i].weight.copy_(chunk_w)
+            
+            start_idx = end_idx
+        print("  🎉 [Weight Loader] All 16 split lm_head matrix nodes bound successfully!")
+
+    split_lm_head.float().eval()
+    for param in split_lm_head.parameters(): param.requires_grad = False
+
+    # 3. Serialize into 16 separate CoreML models to bypass compiler and memory limits
+    for i in range(16):
+        print(f"\n[Pipeline Hub] Compiling Split LM_Head Chunk {i+1}/16...")
         
-    lm_head.float().eval()
-    for param in lm_head.parameters(): 
-        param.requires_grad = False
+        # Dummy module wrapper to isolate a single head layer
+        class SingleHeadWrapper(nn.Module):
+            def __init__(self, head_layer):
+                super().__init__()
+                self.head = head_layer
+            def forward(self, x):
+                return self.head(x)
+                
+        single_head = SingleHeadWrapper(split_lm_head.heads[i])
         
-    # Create dummy input (structured to match the output emerging from the final DecoderLayer stage)
-    dummy_input = torch.randn(1, 1, hidden_dim, dtype=torch.float32)
-    
-    print("  [LM Head] Tracing final token projection graph...")
-    with torch.no_grad():
-        traced_lm = torch.jit.trace(lm_head, (dummy_input,), check_trace=False)
-    
-    # Define input feature specifications for CoreML
-    input_features = [
-        ct.TensorType(name="hidden_states", shape=dummy_input.shape, dtype=np.float32)
-    ]
-    
-    print("  [LM Head] Converting JIT graph into CoreML State MLProgram...")
-    # 🌟 Locked to CPU_AND_GPU (GPU) to crunch this massive 240k-dimensional scale at maximum speed without glitching!
-    mlmodel = ct.convert(
-        traced_lm,
-        inputs=input_features,
-        compute_units=ct.ComputeUnit.CPU_AND_GPU, 
-        convert_to="mlprogram",
-        minimum_deployment_target=ct.target.iOS18
-    )
-    
-    output_package_path = os.path.join(output_dir, "qwen3_5_moe_lm_head.mlpackage")
-    mlmodel.save(output_package_path)
-    print(f"\n🎉 🏁 [SUCCESS] Final token projection CoreML artifact saved to disk: {output_package_path}")
+        # 4D input format: [1, hidden_dim, 1, 1]
+        dummy_input = torch.randn(1, hidden_dim, 1, 1, dtype=torch.float32)
+        traced = torch.jit.trace(single_head, (dummy_input,), check_trace=False)
+        
+        input_features = [ct.TensorType(name="hidden_states", shape=dummy_input.shape, dtype=np.float32)]
+        
+        # Compile each chunk targeting CPU and GPU/ANE
+        mlmodel = ct.convert(
+            traced,
+            inputs=input_features,
+            compute_units=ct.ComputeUnit.CPU_AND_GPU,
+            convert_to="mlprogram",
+            minimum_deployment_target=ct.target.iOS18
+        )
+        
+        # Save individual packages locally (e.g., lm_head_chunk_1.mlpackage)
+        output_package_path = os.path.join(output_dir, f"lm_head_chunk_{i+1}")
+        mlmodel.save(output_package_path)
+        print(f"  🎉 Saved: {output_package_path}")
 
 if __name__ == "__main__":
-    TARGET_MODEL = "Qwen/Qwen3.5-35B-A3B"
-    convert_lm_head_to_coreml(model_id=TARGET_MODEL, output_dir="coreml_lm_head")
+    convert_split_lm_head_to_coreml()

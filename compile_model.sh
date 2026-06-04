@@ -16,13 +16,20 @@ elif [ -d "coreml_rope" ]; then
 fi
 
 
-if [ -d "coreml_lm_head/qwen3_5_moe_lm_head.mlpackage" ]; then
+if [ -d "coreml_lm_head_split" ]; then
+    echo "  [LM Head] Detected 16-split ANE architectures. Compiling all chunks..."
+    find coreml_lm_head_split -name "*.mlpackage" -exec xcrun coremlcompiler compile {} "$DEST_WORKSPACE" \;
+elif [ -d "coreml_lm_head/qwen3_5_moe_lm_head.mlpackage" ]; then
     xcrun coremlcompiler compile coreml_lm_head/qwen3_5_moe_lm_head.mlpackage "$DEST_WORKSPACE"
 elif [ -d "coreml_lm_head" ]; then
     xcrun coremlcompiler compile coreml_lm_head/*.mlpackage "$DEST_WORKSPACE"
 fi
 
-echo -e "\n[Pre-compiling] Looping through all 40 layers sequentially..."
+echo -e "\n[Syncing] Embedding Binary Assets..."
+if [ -d "embedding_binary" ]; then
+    find embedding_binary -name "*.bin" -exec cp {} "$DEST_WORKSPACE/" \;
+    echo "  🎉 Successfully synced embedding binary vectors into: $DEST_WORKSPACE"
+fi
 
 for layer_idx in {0..39}
 do

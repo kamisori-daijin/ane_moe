@@ -12,3 +12,4 @@ coreml_norms/
 coreml_lm_head/
 embedding_binary/
 compiled_model/
+coreml_lm_head_split/
