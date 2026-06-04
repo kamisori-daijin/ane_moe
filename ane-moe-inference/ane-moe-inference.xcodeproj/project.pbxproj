@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		BF416E242FD1874B00DB1B30 /* ane_moe_engine in Frameworks */ = {isa = PBXBuildFile; productRef = BF416E232FD1874B00DB1B30 /* ane_moe_engine */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		BF416E142FD1872600DB1B30 /* ane-moe-inference.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ane-moe-inference.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BF416E242FD1874B00DB1B30 /* ane_moe_engine in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = "ane-moe-inference";
 			packageProductDependencies = (
+				BF416E232FD1874B00DB1B30 /* ane_moe_engine */,
 			);
 			productName = "ane-moe-inference";
 			productReference = BF416E142FD1872600DB1B30 /* ane-moe-inference.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = BF416E0B2FD1872600DB1B30;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				BF416E222FD1874B00DB1B30 /* XCLocalSwiftPackageReference "../ane_moe_engine" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = BF416E152FD1872600DB1B30 /* Products */;
 			projectDirPath = "";
@@ -331,6 +340,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		BF416E222FD1874B00DB1B30 /* XCLocalSwiftPackageReference "../ane_moe_engine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../ane_moe_engine;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BF416E232FD1874B00DB1B30 /* ane_moe_engine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ane_moe_engine;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = BF416E0C2FD1872600DB1B30 /* Project object */;
 }
