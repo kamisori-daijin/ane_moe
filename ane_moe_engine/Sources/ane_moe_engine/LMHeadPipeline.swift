@@ -5,10 +5,11 @@
 //  Created by kamisori-daijin on 2026/06/04.
 //
 
+
 import CoreML
 import Foundation
 import Accelerate
-import VideoToolbox
+
 
 public final class LMHeadPipeline: @unchecked Sendable {
     private let baseModelURL: URL

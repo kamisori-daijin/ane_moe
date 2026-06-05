@@ -14,112 +14,157 @@ struct ContentView: View {
     
     @State private var tokenizer: QwenTokenizer? = nil
     @State private var embedding: EmbeddingContainer? = nil
+    @State private var stateLoader: GatedDeltaNetContainer? = nil
+    // ⭕ Track the newly integrated traditional Softmax Attention container
+    @State private var attentionContainer: FullAttentionContainer? = nil
     
     @State private var inputText: String = "Apple Silicon"
-    
-    // Track the custom model directory URL selected by the user
     @State private var selectedFolderURL: URL? = nil
-
+    
+ 
     var body: some View {
-        VStack(spacing: 15) {
-            Text("Qwen3.5-35B-A3B Input Circuit Test Bench")
-                .font(.headline)
-                .padding(.top)
+        ZStack {
             
-            // Folder selection UI component using NSOpenPanel
-            HStack(spacing: 12) {
-                Button("📁 Select Model Folder...") {
-                    selectModelDirectoryWithPanel()
-                }
-                
-                Text(selectedFolderURL?.path ?? "No folder selected (Click left button)")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(selectedFolderURL == nil ? .red : .gray)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.03))
-                    .cornerRadius(4)
-            }
-            .padding(.horizontal)
             
-            HStack {
-                TextField("Enter text prompt to resolve tokenIDs:", text: $inputText)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                
-                Button("Spark Circuit") {
-                    runInputCircuitTest()
-                }
-                .disabled(tokenizer == nil || embedding == nil)
-                .keyboardShortcut("R", modifiers: .command) // Cmd + R to run the test
-            }
-            .padding(.horizontal)
+            VStack(spacing: 20) {
+                Text("Qwen3.5-35B-A3B Input & Joint State Test Bench")
+                    .font(.headline)
+                    .padding(.top, 28)
+                    .foregroundStyle(.primary)
 
-            ScrollView {
-                Text(logText)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
+                HStack(spacing: 12) {
+                    Button(action: {
+                        selectModelDirectoryWithPanel()
+                    }) {
+                        Label("Select Model Folder...", systemImage: "folder")
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(selectedFolderURL?.path ?? "No folder selected (Click left button)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(selectedFolderURL == nil ? .red : .secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                    }
+                
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(height: 32)
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 20)
+
+                VStack(spacing: 10) {
+                    HStack(spacing: 10) {
+                        TextField("Enter text prompt to resolve tokenIDs:", text: $inputText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 15, design: .monospaced))
+                            .padding(.vertical, 4)
+                            .frame(minWidth: 180, maxWidth: .infinity)
+
+                        Button(action: {
+                            runInputCircuitTest()
+                        }) {
+                            Text("Spark Circuit")
+                                .bold()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(tokenizer == nil || embedding == nil || stateLoader == nil || attentionContainer == nil)
+                        .keyboardShortcut("R", modifiers: .command)
+                    }
+                    .padding(.horizontal, 10)
+
+                    ScrollView {
+                        Text(logText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .frame(minHeight: 160, maxHeight: 240)
+                    
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(.horizontal, 2)
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal, 22)
+              
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .shadow(color: .black.opacity(0.1), radius: 16, y: 4)
+                .frame(maxWidth: 720)
+
+                Spacer(minLength: 12)
             }
-            .background(Color.black.opacity(0.05))
-            .cornerRadius(8)
-            .frame(height: 200)
+            .padding(.vertical, 16)
         }
-        .frame(width: 650, height: 380)
     }
+  
 
-    /// Displays the macOS standard Finder panel (NSOpenPanel) to choose the model directory.
+
+
+    
     func selectModelDirectoryWithPanel() {
         let panel = NSOpenPanel()
         panel.title = "Choose your compiled_model Directory"
         panel.showsHiddenFiles = false
-        panel.canChooseFiles = false       // Restrict selection to directories only
+        panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         
         if panel.runModal() == .OK {
             guard let url = panel.url else { return }
             self.selectedFolderURL = url
-            
-            // Instantly initialize input stream from the selected URL
             setupInputComponents(from: url)
         }
     }
-
-    /// Initializes `wte.bin` and `tokenizer.json` from the provided custom workspace directory.
+    
+    /// Initializes all tokenizers, embedding matrices, DeltaNet states, and GQA caches simultaneously from disk.
     func setupInputComponents(from baseWorkspaceURL: URL) {
         let wteURL = baseWorkspaceURL.appendingPathComponent("qwen3_5_moe_wte.bin")
         let modelFolderURL = baseWorkspaceURL
         
-        logText = "[Selected Path]: \(baseWorkspaceURL.path)\nInitializing gatekeepers..."
+        logText = "[Selected Path]: \(baseWorkspaceURL.path)\nInitializing joint hardware registries..."
         
         Task {
             do {
                 let loadedTokenizer = try await QwenTokenizer(contentsOf: modelFolderURL)
                 let loadedEmbedding = try EmbeddingContainer(contentsOf: wteURL, hiddenSize: 4096)
+                let loadedStateLoader = try await GatedDeltaNetContainer(contentsOf: baseWorkspaceURL, totalLayers: 24)
+                // ⭕ Asynchronously auto-scan and load Softmax Attention blocks into their native registries
+                let loadedAttentionContainer = try await FullAttentionContainer(contentsOf: baseWorkspaceURL, totalLayers: 24)
                 
                 await MainActor.run {
                     self.tokenizer = loadedTokenizer
                     self.embedding = loadedEmbedding
-                    logText += "\n\n✅ [Setup Success] Input pipeline successfully bound to selected hardware footprint!"
+                    self.stateLoader = loadedStateLoader
+                    self.attentionContainer = loadedAttentionContainer
+                    
+                    logText += "\n\n✅ [Setup Success] Hardware pipeline fully bound to target directory footprint!"
                     logText += "\n➔ Tokenizer Backend: Ready"
                     logText += "\n➔ Zero-Copy Embedding Matrix: Ready"
+                    logText += "\n➔ GatedDeltaNet State Registries: Allocated and locked into Unified Memory"
+                    logText += "\n➔ SoftmaxAttention KV Registries: Scanned and secured into target lanes"
                 }
             } catch {
                 await MainActor.run {
                     logText += "\n\n❌ [Setup Error] Failed to map assets at this location: \(error.localizedDescription)"
-                    logText += "\n⚠️ Ensure 'tokenizer.json' and 'qwen3_5_moe_wte.bin' both reside inside the selected directory."
+                    logText += "\n⚠️ Verify configuration files, embedding weights, and all layer compiled graphs exist inside this workspace."
                     self.tokenizer = nil
                     self.embedding = nil
+                    self.stateLoader = nil
+                    self.attentionContainer = nil
                 }
             }
         }
     }
-
-    /// Tests the end-to-end pipeline: Input String ➔ Token IDs ➔ Zero-copy 4D Tensor.
+    
+    /// Tests token conversion pipelines and prints state mapping statuses across interleaved architectures.
     func runInputCircuitTest() {
-        guard let tokenizer = tokenizer, let embedding = embedding else { return }
+        guard let tokenizer = tokenizer,
+              let embedding = embedding,
+              let stateLoader = stateLoader,
+              let attentionContainer = attentionContainer else { return }
         
         logText += "\n\n------------------------------------------------------------------"
         logText += "\n[Input String]: \"\(inputText)\""
@@ -135,15 +180,26 @@ struct ContentView: View {
         logText += "\n[Projecting Zero-Copy Memory View for Token ID: \(firstTokenID)]"
         
         if let inputTensor = embedding.embeddingView(forTokenID: firstTokenID) {
-            logText += "\n🎉 [SUCCESS] 4D MultiArray memory slice mapped instantly!"
+            logText += "\n🎉 [SUCCESS] 4D MultiArray embedding slice mapped instantly!"
             logText += "\n➔ Projected Tensor Shape: \(inputTensor.shape) (NCHW Alignment)"
-            logText += "\n➔ Tensor DataType: \(inputTensor.dataType == .float16 ? "Float16 (CoreML Native)" : "Other")"
             
-            let ptr = inputTensor.dataPointer.assumingMemoryBound(to: Float16.self)
-            let sampleValues = (0..<4).map { String(format: "%.4f", Float(ptr[$0])) }
-            logText += "\n➔ Raw Memory Activations [0..3]: \(sampleValues)"
+            // Inspect and sample Layer 0 vs Layer 1 to verify dynamic scanning and interleaved routing
+            logText += "\n\n[Inspecting Joint Hardware Registries (Interleaved Topology Verification)]"
+            
+            // Layer 0: Traditional Softmax Attention Block
+            if let layer0State = attentionContainer.stateView(forLayer: 0) {
+                logText += "\n🔹 Layer 0 (Attention) -> Native MLState Object Verified: \(Unmanaged.passUnretained(layer0State).toOpaque())"
+            }
+            
+            // Layer 1: Linear Recurrent Gated Delta Net Block
+            if let layer1State = stateLoader.stateView(forLayer: 1),
+               let backingArray = stateLoader.backingArrayView(forLayer: 1) {
+                logText += "\n🔸 Layer 1 (DeltaNet)   -> Native MLState Object Verified: \(Unmanaged.passUnretained(layer1State).toOpaque())"
+                logText += "\n   ➔ Packed Register Memory Map Shape: \(backingArray.shape)"
+            }
         } else {
             logText += "\n❌ [Runtime Error] Zero-copy memory slicing collapsed data boundaries."
         }
     }
 }
+
