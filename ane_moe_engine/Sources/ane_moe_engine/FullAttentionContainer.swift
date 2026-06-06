@@ -55,7 +55,16 @@ public final class FullAttentionContainer: @unchecked Sendable {
             guard fileManager.fileExists(atPath: layerFolderURL.path) else { continue }
             
             let folderContents = try? fileManager.contentsOfDirectory(at: layerFolderURL, includingPropertiesForKeys: nil)
-            guard let modelURL = folderContents?.first(where: { $0.pathExtension == "mlmodelc" }) else { continue }
+            guard let contents = folderContents else { continue }
+            
+           
+            guard let modelURL = contents.first(where: {
+                $0.pathExtension == "mlmodelc" && $0.lastPathComponent.lowercased().contains("softmax_attention")
+            }) else {
+                
+                continue
+            }
+            
             
             // Filter and extract traditional Softmax Attention blocks exclusively
             if modelURL.lastPathComponent.contains("softmax") || modelURL.lastPathComponent.contains("attention") {
