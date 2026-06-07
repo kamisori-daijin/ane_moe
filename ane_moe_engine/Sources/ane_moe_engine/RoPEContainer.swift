@@ -7,6 +7,7 @@
 
 import CoreML
 import Foundation
+import CoreVideo
 
 /// A hardware-accelerated matrix manager that drives ANE-optimized 4D-Native Rotary Embedding (RoPE) networks.
 public final class RoPEContainer: @unchecked Sendable {
@@ -27,7 +28,6 @@ public final class RoPEContainer: @unchecked Sendable {
         configuration.computeUnits = .cpuAndNeuralEngine
         
         let fileManager = FileManager.default
-        
         let ropeModelURL = baseDirectoryURL.appendingPathComponent("qwen3_5_moe_rope.mlmodelc")
         
         if fileManager.fileExists(atPath: ropeModelURL.path) {
@@ -43,51 +43,30 @@ public final class RoPEContainer: @unchecked Sendable {
     ///   - currentLengthBuffer: The 4D hardware register containing the active sequence execution index step.
     ///   - cosBuffer: The destination tracking register allocated to capture computed cosine frequencies.
     ///   - sinBuffer: The destination tracking register allocated to capture computed sine frequencies.
+    ///   - options: The dynamic prediction options tracking memory output backings.
     public func computeRoPE(
-        currentLengthBuffer: CVPixelBuffer,
-        destinationCos cosBuffer: CVPixelBuffer,
-        destinationSin sinBuffer: CVPixelBuffer
+        currentLengthBuffer: MLMultiArray,
+        destinationCos cosBuffer: MLMultiArray,
+        destinationSin sinBuffer: MLMultiArray,
+        options: MLPredictionOptions
     ) async throws {
         guard let model = ropeModel else { return }
         
-     
+        // Pass the incoming MLMultiArray directly into the input feature provider node without casting
         let inputs = try MLDictionaryFeatureProvider(dictionary: [
-            "current_length": MLFeatureValue(pixelBuffer: currentLengthBuffer)
+            "current_length": MLFeatureValue(multiArray: currentLengthBuffer)
         ])
         
-      
-        let prediction = try await model.prediction(from: inputs)
+        // Enforce zero-copy direct writing from ANE to pre-allocated target arrays via outputBackings
+        // Aligns with Python multiple return keys: "cos_out" and "sin_out"
+        options.outputBackings = [
+            "cos_out": cosBuffer,
+            "sin_out": sinBuffer
+        ]
         
-     
+        // Core ANE inference; dumps frequency results directly into the designated buffers without race conditions
+        _ = try await model.prediction(from: inputs, options: options)
         
-        guard let cosFeature = prediction.featureValue(for: "cos_out")?.imageBufferValue,
-              let sinFeature = prediction.featureValue(for: "sin_out")?.imageBufferValue else {
-            throw NSError(
-                domain: "RotaryEmbeddingContainer",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to extract ANE-RoPE hardware matrices from the graph output."]
-            )
-        }
-        
-      
-        CVPixelBufferLockBaseAddress(cosBuffer, [])
-        CVPixelBufferLockBaseAddress(sinBuffer, [])
-        CVPixelBufferLockBaseAddress(cosFeature, .readOnly)
-        CVPixelBufferLockBaseAddress(sinFeature, .readOnly)
-        
-        let cosDst = CVPixelBufferGetBaseAddress(cosBuffer)!
-        let sinDst = CVPixelBufferGetBaseAddress(sinBuffer)!
-        let cosSrc = CVPixelBufferGetBaseAddress(cosFeature)!
-        let sinSrc = CVPixelBufferGetBaseAddress(sinFeature)!
-        
-        let totalBytes = 1 * totalChannels * 1 * 1 * MemoryLayout<Float16>.stride // 4096 * 2 = 8192 bytes
-        
-        memcpy(cosDst, cosSrc, totalBytes)
-        memcpy(sinDst, sinSrc, totalBytes)
-        
-        CVPixelBufferUnlockBaseAddress(sinFeature, .readOnly)
-        CVPixelBufferUnlockBaseAddress(cosFeature, .readOnly)
-        CVPixelBufferUnlockBaseAddress(sinBuffer, [])
-        CVPixelBufferUnlockBaseAddress(cosBuffer, [])
+        // Eliminates CPU locking overhead and memory copying entirely to preserve copy-free pipelining
     }
 }

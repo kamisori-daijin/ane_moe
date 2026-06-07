@@ -8,48 +8,55 @@
 
 import CoreML
 import Foundation
-import Accelerate
+import CoreVideo
 
-
+/// A hardware-accelerated causal language model head that projects final hidden states into a massive 151k vocabulary space across 16 ANE chunks.
 public final class LMHeadPipeline: @unchecked Sendable {
     private let baseModelURL: URL
     private var chunkModels: [MLModel] = []
     
-    public let vocabSize = 248320
+    // Aligned to padded vocabulary size matching 16 divisible ANE chunks (16 * 9504 = 152,064)
+    public let vocabSize = 152064
     public let chunkCount = 16
     public let hiddenDim: Int
-    public let chunkSize = 15520 // 248320 / 16 = 15520 fixed
+    public let chunkSize = 9504  // 152064 / 16 = 9504 fixed per ANE chunk
     
-    // A single unified pixel buffer that serves as the zero-copy target for 240k logits output
+    // A single unified pixel buffer that serves as the zero-copy target for 152k logits output
     private let outputPixelBuffer: CVPixelBuffer
     private var preAllocatedOutputArrays: [MLMultiArray] = []
     
-    public init(contentsOf baseDirectoryURL: URL, hiddenDim: Int = 4096) throws {
+    // Reusable prediction options to eliminate allocation spikes
+    private let predictionOptions = MLPredictionOptions()
+    
+    /// Initializes the LM Head pipeline by allocating the super-tensor IOSurface and loading the 16 model chunks.
+    public init(contentsOf baseDirectoryURL: URL, hiddenDim: Int = 2048) throws {
         self.baseModelURL = baseDirectoryURL
         self.hiddenDim = hiddenDim
         
-        // 1. Allocate a flat 1x248320 grayscale-like pixel buffer to hold Float16 logits
-        var pixelBuffer: CVPixelBuffer? = nil
-        let attributes: [CFString: Any] = [
-            kCVPixelBufferMetalCompatibilityKey: true, // Allows high-speed communication with ANE/GPU
-            kCVPixelBufferIOSurfacePropertiesKey: [:]  // Prevents extra memory copies
+        // 1. Allocate a unified, super-tensor IOSurface pixel buffer for 152k logits
+        let bufferAttributes: [CFString: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as [CFString: Any], // Force IOSurface backing
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferCGImageCompatibilityKey: false,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: false
         ]
         
+        var pixelBuffer: CVPixelBuffer? = nil
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault,
-            vocabSize, // Width = 248320
+            vocabSize, // Width = 152064
             1,         // Height = 1
-            kCVPixelFormatType_OneComponent16Half, // Native Float16 (Half Float) format
-            attributes as CFDictionary,
+            kCVPixelFormatType_OneComponent16Half, // Native Float16
+            bufferAttributes as CFDictionary,
             &pixelBuffer
         )
         
         guard status == kCVReturnSuccess, let resolvedBuffer = pixelBuffer else {
-            throw NSError(domain: "LMHeadPipeline", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate 240k-dimensional CVPixelBuffer allocation."])
+            throw NSError(domain: "LMHeadPipeline", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate true IOSurface for 152k logits matrix."])
         }
         self.outputPixelBuffer = resolvedBuffer
         
-        // 2. Asynchronously target and initialize the 16 compiled ANE model chunks
+        // 2. Load all 16 compiled ANE chunk models
         let config = MLModelConfiguration()
         config.computeUnits = .cpuAndNeuralEngine
         
@@ -59,57 +66,81 @@ public final class LMHeadPipeline: @unchecked Sendable {
             self.chunkModels.append(model)
         }
         
-        // 3. Slice the unified pixel buffer into 16 pre-allocated MLMultiArray views of size 15520
+        // 3. Slice the single IOSurface memory space into 16 distinct MLMultiArray view descriptors
         CVPixelBufferLockBaseAddress(outputPixelBuffer, .readOnly)
-        let rawBaseAddress = CVPixelBufferGetBaseAddress(outputPixelBuffer)!
+        guard let rawBaseAddress = CVPixelBufferGetBaseAddress(outputPixelBuffer) else {
+            CVPixelBufferUnlockBaseAddress(outputPixelBuffer, .readOnly)
+            throw NSError(domain: "LMHeadPipeline", code: -2, userInfo: [NSLocalizedDescriptionKey: "Failed to retrieve hardware base address."])
+        }
         CVPixelBufferUnlockBaseAddress(outputPixelBuffer, .readOnly)
         
-        let shape: [NSNumber] = [1, NSNumber(value: chunkSize), 1, 1]
-        let strides: [NSNumber] = [NSNumber(value: chunkSize), 1, 1, 1]
+        // Match the expected 4D output shape [1, chunkSize, 1, 1] of each python chunk model
+        let chunkShape: [NSNumber] = [1, chunkSize as NSNumber, 1, 1]
+        let chunkStrides: [NSNumber] = [chunkSize as NSNumber, 1, 1, 1]
         
         for i in 0..<chunkCount {
-            // Offset the memory pointer by 15520 * 2 bytes (Float16) for each consecutive chunk room
+            // Calculate stride offsets (element count * 2 bytes for Float16)
             let chunkOffsetBytes = i * chunkSize * 2
             let chunkPointer = rawBaseAddress.advanced(by: chunkOffsetBytes)
             
-            // Wrap raw pointers directly so all 16 slices observe unique segments of the exact same pixel buffer
-            let array = try MLMultiArray(
+            // Wrap the specific isolated pointer address inside a zero-copy MLMultiArray descriptor
+            let sliceArray = try MLMultiArray(
                 dataPointer: UnsafeMutableRawPointer(mutating: chunkPointer),
-                shape: shape,
+                shape: chunkShape,
                 dataType: .float16,
-                strides: strides,
-                deallocator: { _ in }
+                strides: chunkStrides,
+                deallocator: { _ in } // Lifecycle managed by the parent outputPixelBuffer
             )
-            self.preAllocatedOutputArrays.append(array)
+            self.preAllocatedOutputArrays.append(sliceArray)
         }
         
         print("🎉 [Output Pipeline] 16-split ANE LM_Head fully integrated with Zero-Copy CVPixelBuffer matrix.")
     }
     
+    // MARK: - Public Execution API
+    
     /// Projects hidden states across the 16 model chunks and resolves the next token ID using high-speed argmax.
-    public func predictedTokenID(fromFinalHiddenStates hiddenStates: MLMultiArray) -> Int {
-        // 1. Run predictions across all 16 ANE chunks using bounded feature providers
+    ///
+    /// - Parameter hiddenStates: The final token state tensor backing coming straight out of the 40-layer pipeline.
+    /// - Returns: The factually resolved highest probability token ID integer.
+    public func predictedTokenID(fromFinalHiddenStates hiddenStates: MLMultiArray) async throws -> Int {
+        
+        // 1. Execute inference sequentially across all 16 ANE chunk models
         for i in 0..<chunkCount {
             let model = chunkModels[i]
-            let _ = preAllocatedOutputArrays[i] // Ensure the pre-bound output memory remains retained
+            let sliceTargetArray = preAllocatedOutputArrays[i]
             
-            let inputFeatures = try! MLDictionaryFeatureProvider(dictionary: ["hidden_states": hiddenStates])
+            let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+                "hidden_states": MLFeatureValue(multiArray: hiddenStates)
+            ])
             
-            // CoreML mutates the pre-bound outputArray memory location instantly without allocation overhead
-            _ = try! model.prediction(from: inputFeatures, options: MLPredictionOptions())
+            // Pin the execution output to the pre-allocated slice sliceTargetArray to prevent validation errors
+            let outputKey = model.modelDescription.outputDescriptionsByName.keys.first ?? "logits"
+            predictionOptions.outputBackings = [
+                outputKey: sliceTargetArray
+            ]
+            
+            // Core ANE inference; dumps results directly into the designated IOSurface slice
+            _ = try await model.prediction(from: inputFeatures, options: predictionOptions)
         }
         
-        // 2. Lock the unified pixel buffer and extract the highest probability token via Auto-Vectorization
-        CVPixelBufferLockBaseAddress(outputPixelBuffer, [])
-        let outRawPtr = CVPixelBufferGetBaseAddress(outputPixelBuffer)!.assumingMemoryBound(to: Float16.self)
+        // 2. Lock the giant IOSurface buffer to perform an auto-vectorized argmax loop on CPU
+        CVPixelBufferLockBaseAddress(outputPixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(outputPixelBuffer, .readOnly) }
         
-        // Bind the raw address to a safe UnsafeBufferPointer to enable compiler auto-vectorization
-        let buffer = UnsafeBufferPointer(start: outRawPtr, count: vocabSize)
+        guard let outRawPtr = CVPixelBufferGetBaseAddress(outputPixelBuffer) else {
+            throw NSError(domain: "LMHeadPipeline", code: -3, userInfo: [NSLocalizedDescriptionKey: "Failed to lock output buffer address for ArgMax scan."])
+        }
+        
+        let typedPointer = outRawPtr.assumingMemoryBound(to: Float16.self)
+        
+        // Wrap in an unsafe buffer pointer to ensure compiler auto-vectorization (SIMD) optimizations
+        let buffer = UnsafeBufferPointer(start: typedPointer, count: vocabSize)
         
         var argmaxIndex = 0
         var maxProbability = buffer[0]
         
-        // Scan the 240k-dimensional buffer efficiently using compiler-optimized SIMD loops
+        // Highly optimized scan across the 152k vocabulary dimension
         for idx in 1..<vocabSize {
             let val = buffer[idx]
             if val > maxProbability {
@@ -117,8 +148,6 @@ public final class LMHeadPipeline: @unchecked Sendable {
                 argmaxIndex = idx
             }
         }
-        
-        CVPixelBufferUnlockBaseAddress(outputPixelBuffer, [])
         
         return argmaxIndex
     }

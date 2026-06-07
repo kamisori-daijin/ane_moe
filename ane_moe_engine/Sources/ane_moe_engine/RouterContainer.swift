@@ -4,9 +4,9 @@
 //
 //  Created by kamisori-daijin on 2026/06/06.
 //
-
 import CoreML
 import Foundation
+import CoreVideo
 
 /// A hardware-accelerated routing manager that dispatches token sequences to specific experts based on gating probabilities.
 public final class RouterContainer: @unchecked Sendable {
@@ -21,14 +21,14 @@ public final class RouterContainer: @unchecked Sendable {
     private let totalLayers: Int
     private var layers: [Int: MLModel] = [:]
     
-    // Global shared execution workspaces to strictly control the memory footprint across layers
-    private let sharedExpertInputs: [Int: CVPixelBuffer]
-    private let sharedExpertOutputs: [Int: CVPixelBuffer]
+    // Shared expert workspaces managed as IOSurface-backed MLMultiArrays
+    public let sharedExpertInputs: [Int: MLMultiArray]
+    public let sharedExpertOutputs: [Int: MLMultiArray]
     
     // MARK: - Initialization
     
     /// Initializes the router by scanning the specified directory and allocating shared hardware registers.
-    public init(contentsOf baseDirectoryURL: URL, totalLayers: Int = 24) async throws {
+    public init(contentsOf baseDirectoryURL: URL, totalLayers: Int = 40) async throws {
         self.totalLayers = totalLayers
         
         let configuration = MLModelConfiguration()
@@ -36,27 +36,53 @@ public final class RouterContainer: @unchecked Sendable {
         
         let fileManager = FileManager.default
         let bufferAttributes: [CFString: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as [CFString: Any], // Force IOSurface backing
             kCVPixelBufferMetalCompatibilityKey: true,
-            kCVPixelBufferIOSurfacePropertiesKey: [:]
+            kCVPixelBufferCGImageCompatibilityKey: false,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: false
         ]
         
-        let totalBufferSize = maxSequenceLength * hiddenDimensions
+        // Exact shape definition fully aligned with Python's converter layout: [1, Tokens(512), HiddenDim(2048)]
+        let expertShape: [NSNumber] = [1, maxSequenceLength as NSNumber, hiddenDimensions as NSNumber]
         
-        var inputs: [Int: CVPixelBuffer] = [:]
-        var outputs: [Int: CVPixelBuffer] = [:]
+        var inputs: [Int: MLMultiArray] = [:]
+        var outputs: [Int: MLMultiArray] = [:]
         
         for expertIndex in 0..<expertCount {
-            var inputBuffer: CVPixelBuffer?
-            var outputBuffer: CVPixelBuffer?
+            var inputBuffer: CVPixelBuffer? = nil
+            var outputBuffer: CVPixelBuffer? = nil
             
-            CVPixelBufferCreate(kCFAllocatorDefault, totalBufferSize, 1, kCVPixelFormatType_OneComponent16Half, bufferAttributes as CFDictionary, &inputBuffer)
-            CVPixelBufferCreate(kCFAllocatorDefault, totalBufferSize, 1, kCVPixelFormatType_OneComponent16Half, bufferAttributes as CFDictionary, &outputBuffer)
+            // Map pixel buffer tracking dimensions straight to tensor shape layouts.
+            // Width maps to the trailing dimension (2048), Height maps to the sequence slots (512).
+            CVPixelBufferCreate(
+                kCFAllocatorDefault,
+                hiddenDimensions,  // Width = 2048
+                maxSequenceLength, // Height = 512
+                kCVPixelFormatType_OneComponent16Half,
+                bufferAttributes as CFDictionary,
+                &inputBuffer
+            )
+            
+            CVPixelBufferCreate(
+                kCFAllocatorDefault,
+                hiddenDimensions,
+                maxSequenceLength,
+                kCVPixelFormatType_OneComponent16Half,
+                bufferAttributes as CFDictionary,
+                &outputBuffer
+            )
             
             guard let resolvedInput = inputBuffer, let resolvedOutput = outputBuffer else {
-                throw NSError(domain: "MoERouter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Hardware allocation failed for shared expert pools."])
+                throw NSError(
+                    domain: "MoERouter",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Hardware allocation failed for shared expert pools."]
+                )
             }
-            inputs[expertIndex] = resolvedInput
-            outputs[expertIndex] = resolvedOutput
+            
+            // Zero-copy multi-array bindings that now fully clear OS hardware-native stride validations.
+            inputs[expertIndex] = MLMultiArray(pixelBuffer: resolvedInput, shape: expertShape)
+            outputs[expertIndex] = MLMultiArray(pixelBuffer: resolvedOutput, shape: expertShape)
         }
         
         self.sharedExpertInputs = inputs
@@ -64,7 +90,9 @@ public final class RouterContainer: @unchecked Sendable {
         
         for layerIndex in 0..<totalLayers {
             let layerDirectoryURL = baseDirectoryURL.appendingPathComponent("layer_\(layerIndex)")
-            guard fileManager.fileExists(atPath: layerDirectoryURL.path) else { continue }
+            guard fileManager.fileExists(atPath: layerDirectoryURL.path) else {
+                continue
+            }
             
             let routerModelURL = layerDirectoryURL.appendingPathComponent("router.mlmodelc")
             if fileManager.fileExists(atPath: routerModelURL.path) {
@@ -81,93 +109,118 @@ public final class RouterContainer: @unchecked Sendable {
     ///   - hiddenStates: The input tracking sequence register containing current spatial states.
     ///   - layerIndex: The current executing structural block index inside the network graph.
     ///   - tokenCount: The factual sequence length currently active inside the context window.
+    ///   - options: The dynamic prediction options tracking memory output backings.
     /// - Returns: The mutated sequence register containing the scaled expert combination outputs.
     @discardableResult
-    public func route(_ hiddenStates: CVPixelBuffer, layerIndex: Int, activeTokenCount tokenCount: Int) async throws -> CVPixelBuffer {
-        guard let routerModel = layers[layerIndex] else { return hiddenStates }
+    public func route(
+        _ hiddenStates: MLMultiArray,
+        layerIndex: Int,
+        activeTokenCount tokenCount: Int,
+        options: MLPredictionOptions
+    ) async throws -> (outputTensor: MLMultiArray, activeExperts: Set<Int>) {
+        guard let routerModel = layers[layerIndex] else {
+            return (hiddenStates, [])
+        }
         
         // 1. Evaluate Gating Probabilities
         let features = try MLDictionaryFeatureProvider(dictionary: [
-            "hidden_states": MLFeatureValue(pixelBuffer: hiddenStates)
+            "hidden_states": MLFeatureValue(multiArray: hiddenStates)
         ])
-        let prediction = try await routerModel.prediction(from: features)
+        let prediction = try await routerModel.prediction(from: features, options: options)
         
         guard let scoresArray = prediction.featureValue(for: "router_scores")?.multiArrayValue,
               let indicesArray = prediction.featureValue(for: "router_indices")?.multiArrayValue else {
-            throw NSError(domain: "MoERouter", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid gating outputs."])
+            throw NSError(
+                domain: "MoERouter",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid gating outputs."]
+            )
         }
         
         // 2. Track Routing Metrics
         var expertTokenCounts = [Int](repeating: 0, count: expertCount)
         var routingMap = [[(expertIndex: Int, position: Int)]](repeating: [], count: tokenCount)
+        var activeExperts = Set<Int>()
         
-     
         let indicesStrides = indicesArray.strides.map { $0.intValue }
         let indicesRawPtr = indicesArray.dataPointer.assumingMemoryBound(to: Int32.self)
         
-        CVPixelBufferLockBaseAddress(hiddenStates, .readOnly)
-        let sourcePointer = CVPixelBufferGetBaseAddress(hiddenStates)!.assumingMemoryBound(to: Float16.self)
+        // Lock the source pixel buffer for safe pointer access
+        guard let srcPixelBuffer = hiddenStates.pixelBuffer else {
+            return (hiddenStates, [])
+        }
+        CVPixelBufferLockBaseAddress(srcPixelBuffer, .readOnly)
+        let sourcePointer = CVPixelBufferGetBaseAddress(srcPixelBuffer)!.assumingMemoryBound(to: Float16.self)
         
         // 3. Scatter Step: Distribute tokens into expert slots
         for tokenIndex in 0..<tokenCount {
             for k in 0..<topK {
-                
                 let offset = (tokenIndex * indicesStrides[1]) + (k * indicesStrides[2])
                 let expertIndex = Int(indicesRawPtr[offset])
                 
                 let currentPosition = expertTokenCounts[expertIndex]
                 routingMap[tokenIndex].append((expertIndex, currentPosition))
+                activeExperts.insert(expertIndex) // Mark active expert IDs for dynamic loading
                 
-                if let expertInput = sharedExpertInputs[expertIndex] {
-                    CVPixelBufferLockBaseAddress(expertInput, [])
-                    let destinationPointer = CVPixelBufferGetBaseAddress(expertInput)!.assumingMemoryBound(to: Float16.self)
+                if let expertInputTensor = sharedExpertInputs[expertIndex],
+                   let expertInputBuffer = expertInputTensor.pixelBuffer {
+                    CVPixelBufferLockBaseAddress(expertInputBuffer, [])
+                    let destinationPointer = CVPixelBufferGetBaseAddress(expertInputBuffer)!.assumingMemoryBound(to: Float16.self)
                     
                     let sourceOffset = tokenIndex * hiddenDimensions
                     let destinationOffset = currentPosition * hiddenDimensions
                     
-                    memcpy(destinationPointer.advanced(by: destinationOffset),
-                           sourcePointer.advanced(by: sourceOffset),
-                           hiddenDimensions * MemoryLayout<Float16>.stride)
+                    memcpy(
+                        destinationPointer.advanced(by: destinationOffset),
+                        sourcePointer.advanced(by: sourceOffset),
+                        hiddenDimensions * MemoryLayout<Float16>.stride
+                    )
                     
-                    CVPixelBufferUnlockBaseAddress(expertInput, [])
+                    CVPixelBufferUnlockBaseAddress(expertInputBuffer, [])
                 }
                 expertTokenCounts[expertIndex] += 1
             }
         }
-        CVPixelBufferUnlockBaseAddress(hiddenStates, .readOnly)
+        CVPixelBufferUnlockBaseAddress(srcPixelBuffer, .readOnly)
         
-      
+        // 4. Control returns to pipeline to invoke ExpertsContainer.executeRequiredChunks using activeExperts
+        
         // 5. Gather Step: Merge, scale, and accumulate localized results
         let scoresStrides = scoresArray.strides.map { $0.intValue }
         let scoresRawPtr = scoresArray.dataPointer.assumingMemoryBound(to: Float.self)
         
-        CVPixelBufferLockBaseAddress(hiddenStates, [])
-        let finalDestinationPointer = CVPixelBufferGetBaseAddress(hiddenStates)!.assumingMemoryBound(to: Float16.self)
+        CVPixelBufferLockBaseAddress(srcPixelBuffer, [])
+        let finalDestinationPointer = CVPixelBufferGetBaseAddress(srcPixelBuffer)!.assumingMemoryBound(to: Float16.self)
         memset(finalDestinationPointer, 0, tokenCount * hiddenDimensions * MemoryLayout<Float16>.stride)
         
         for tokenIndex in 0..<tokenCount {
             for k in 0..<topK {
-                let routing = routingMap[tokenIndex][k]
+                let routeInfo = routingMap[tokenIndex][k]
+                let expertIndex = routeInfo.expertIndex
+                let currentPosition = routeInfo.position
                 
-                let offset = (tokenIndex * scoresStrides[1]) + (k * scoresStrides[2])
-                let score = Float16(scoresRawPtr[offset])
+                let scoreOffset = (tokenIndex * scoresStrides[1]) + (k * scoresStrides[2])
+                let gateScore = scoresRawPtr[scoreOffset]
                 
-                if let expertOutput = sharedExpertOutputs[routing.expertIndex] {
-                    CVPixelBufferLockBaseAddress(expertOutput, .readOnly)
-                    let expertSourcePointer = CVPixelBufferGetBaseAddress(expertOutput)!.assumingMemoryBound(to: Float16.self)
+                if let expertOutputTensor = sharedExpertOutputs[expertIndex],
+                   let expertOutputBuffer = expertOutputTensor.pixelBuffer {
+                    CVPixelBufferLockBaseAddress(expertOutputBuffer, .readOnly)
+                    let sourcePointer = CVPixelBufferGetBaseAddress(expertOutputBuffer)!.assumingMemoryBound(to: Float16.self)
                     
-                    let sourceOffset = routing.position * hiddenDimensions
-                    let destinationOffset = tokenIndex * hiddenDimensions
+                    let srcOffset = currentPosition * hiddenDimensions
+                    let dstOffset = tokenIndex * hiddenDimensions
+                    
+                    let srcTokenPtr = sourcePointer.advanced(by: srcOffset)
+                    let dstTokenPtr = finalDestinationPointer.advanced(by: dstOffset)
                     
                     for d in 0..<hiddenDimensions {
-                        finalDestinationPointer[destinationOffset + d] += expertSourcePointer[sourceOffset + d] * score
+                        dstTokenPtr[d] += Float16(Float(srcTokenPtr[d]) * gateScore)
                     }
-                    CVPixelBufferUnlockBaseAddress(expertOutput, .readOnly)
+                    CVPixelBufferUnlockBaseAddress(expertOutputBuffer, .readOnly)
                 }
             }
         }
-        CVPixelBufferUnlockBaseAddress(hiddenStates, [])
-        
-        return hiddenStates
+        CVPixelBufferUnlockBaseAddress(srcPixelBuffer, [])
+        return (hiddenStates, activeExperts)
     }
 }
