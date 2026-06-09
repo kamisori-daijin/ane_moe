@@ -4,11 +4,9 @@ import glob
 import torch
 from transformers import AutoConfig
 from safetensors.torch import load_file
+from ane_moe.converter.experts_converter import convert_experts_to_coreai
 
-
-from ane_moe.converter.experts_converter import convert_all_experts_to_coreml_fp16_lut4
-
-def run_pipeline_from_hf_cache(model_id, output_workspace="coreml_experts_workspace"):
+def run_pipeline_from_hf_cache(model_id, output_workspace="coreai_experts_workspace"):
     home_dir = os.path.expanduser("~")
     formatted_model_id = f"models--{model_id.replace('/', '--')}"
     base_cache_path = os.path.join(home_dir, ".cache", "huggingface", "hub", formatted_model_id, "snapshots")
@@ -83,11 +81,11 @@ def run_pipeline_from_hf_cache(model_id, output_workspace="coreml_experts_worksp
                 if has_gate_up and has_down:
                     print(f"  [Loader Success] All component matrices assembled into local dictionary.")
                 
-                    convert_all_experts_to_coreml_fp16_lut4(
+                    convert_experts_to_coreai(
                         hf_state_dict=layer_state_dict,
                         model_config=config,
                         layer_idx=layer_idx,
-                        output_dir=output_workspace,
+                        base_output_dir=output_workspace,
                         tokens_per_expert=1,
                         lut_bits=4
                     )
@@ -106,11 +104,11 @@ def run_pipeline_from_hf_cache(model_id, output_workspace="coreml_experts_worksp
         safetensors_files = glob.glob(os.path.join(snapshot_path, "*.safetensors"))
         hf_state_dict = load_file(safetensors_files)
         for layer_idx in range(num_layers):
-            convert_all_experts_to_coreml_fp16_lut4(
+            convert_experts_to_coreai(
                 hf_state_dict=hf_state_dict,
                 model_config=config,
                 layer_idx=layer_idx,
-                output_dir=output_workspace,
+                base_output_dir=output_workspace,
                 tokens_per_expert=1,
                 lut_bits=4
             )
@@ -120,5 +118,5 @@ if __name__ == "__main__":
     
     run_pipeline_from_hf_cache(
         model_id=TARGET_MODEL,
-        output_workspace="coreml_experts"
+        output_workspace="coreai_experts"
     )
