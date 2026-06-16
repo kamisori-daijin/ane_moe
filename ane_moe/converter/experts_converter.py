@@ -1,11 +1,13 @@
 import os
-import warnings
-import numpy as np
+from pathlib import Path
 import torch
-import coremltools as ct
-import coremltools.optimize as cto
+from coreai_torch import TorchConverter
+import coreai_torch
+import coreai_opt as opt
+from coreai_opt.quantization import Quantizer, QuantizerConfig
+from coreai_opt.casting import cast_to_16_bit_precision
 
-def load_weights_into_anemll_experts_chunk(ane_experts_module, hf_layer_state_dict, layer_idx, expert_start, expert_end):
+def load_weights_into_experts_chunk(ane_experts_module, hf_layer_state_dict, layer_idx, expert_start, expert_end):
     """Pulls an expert slice [start:end] to prevent RAM spikes on tight memory machines."""
     with torch.no_grad():
         intermediate_dim = ane_experts_module.intermediate_dim
@@ -74,10 +76,10 @@ def convert_all_experts_to_coreml_fp16_lut4(
         scratch_expert = Qwen3_5MoeExperts(chunk_config)
         
         # Pull parameter nodes slice from dictionary
-        load_weights_into_anemll_experts_chunk(scratch_expert, hf_state_dict, layer_idx, start_idx, end_idx)
+        load_weights_into_experts_chunk(scratch_expert, hf_state_dict, layer_idx, start_idx, end_idx)
         
-        scratch_expert.half()
         scratch_expert.eval()
+        scratch_expert.half()
         for param in scratch_expert.parameters():
             param.requires_grad = False
             
@@ -86,43 +88,28 @@ def convert_all_experts_to_coreml_fp16_lut4(
             current_chunk_size, tokens_per_expert, hidden_dim, dtype=torch.float16
         )
         
-        # Trace micro-graph without spawning excessive tracing nodes
-        with torch.no_grad():
-            traced_expert = torch.jit.trace(scratch_expert, (dummy_expert_batched_input,), strict=False)
+            
+        output_path = Path(output_dir)
+        layer_output_dir = output_path / f"layer_{layer_idx}"
+        layer_output_dir.mkdir(parents=True, exist_ok=True)   
+           
         
-        import numpy as np
-        inputs = [ct.TensorType(name="expert_batched_hidden_states", shape=dummy_expert_batched_input.shape, dtype=np.float16)]
-        
-        # Translate frontend graphs into independent MIL programs
-        mlmodel = ct.convert(
-            traced_expert,
-            inputs=inputs,
-            compute_precision=ct.precision.FLOAT16,
-            compute_units=ct.ComputeUnit.CPU_AND_NE,
-            minimum_deployment_target=ct.target.iOS18,
-            convert_to="mlprogram"
+            
+        converter = TorchConverter().add_pytorch_module(
+            scratch_expert,
+            export_fn=lambda m: torch.export.export(
+                m, 
+                args=(dummy_expert_batched_input,)
+            ).run_decompositions(
+                coreai_torch.get_decomp_table()
+            ),
         )
+        coreai_program = converter.to_coreai()
         
-        # Execute post-training palettization compression pipeline
-        if lut_bits is not None:
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', UserWarning)
-                    # [UPDATED] Swapped granularity to per_grouped_channel setup
-                    # Specified group_size=16 for tight numerical alignment maps
-                    palettizer_cfg = cto.coreml.OpPalettizerConfig(
-                        mode="kmeans",
-                        nbits=lut_bits,
-                        granularity="per_grouped_channel",
-                        group_size=16,
-                        num_kmeans_workers=1
-                    )
-                    config = cto.coreml.OptimizationConfig(global_config=palettizer_cfg)
-                    mlmodel = cto.coreml.palettize_weights(mlmodel, config)
-            except Exception as e:
-                print(f"    Warning: Quantization skipped: {str(e)}")
-                
-        # Serialize out to separate storage workspace containers
-        save_path = os.path.join(output_dir, f"qwen_expert_layer_{layer_idx}_chunk_{start_idx:03d}.mlpackage")
-        mlmodel.save(save_path)
-        print(f"    [Success] Saved: {save_path}")
+        # 3. Make CoreAI program and save
+        coreai_program = converter.to_coreai()
+        coreai_program.optimize()
+        save_file_path = layer_output_dir / f"qwen_expert_layer_{layer_idx}_chunk_{start_idx:03d}.aimodel"
+        coreai_program.save_asset(save_file_path)
+        
+        print(f"    [Success] Saved: {save_file_path}")
