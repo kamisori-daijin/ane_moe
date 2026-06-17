@@ -120,5 +120,5 @@ if __name__ == "__main__":
     
     run_pipeline_from_hf_cache(
         model_id=TARGET_MODEL,
-        output_workspace="coreml_experts"
+        output_workspace="coreai_experts"
     )

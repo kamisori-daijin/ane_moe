@@ -7,7 +7,7 @@ from safetensors.torch import load_file
 
 from ane_moe.converter.attention_converter import convert_all_attentions_to_coreml_fp32
 
-def run_attention_generation_pipeline(model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreml_workspace"):
+def run_attention_generation_pipeline(model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreai_workspace"):
     """
     Scans the Hugging Face local cache snapshot repo, determines hybrid layer maps,
     and sequentially triggers FP32 compilation loop cycles layer by layer.
@@ -111,5 +111,5 @@ if __name__ == "__main__":
     
     run_attention_generation_pipeline(
         model_id=TARGET_MODEL,
-        base_output_workspace="coreml_attentions"
+        base_output_workspace="coreai_attentions"
     )

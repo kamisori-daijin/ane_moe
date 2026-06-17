@@ -197,7 +197,7 @@ class Qwen3_5MoeGatedDeltaNet(nn.Module):
         state_update = (
             (decayed_s_matrix + delta_s).view(self.s_matrix_shape).contiguous()
         )
-        self.s_matrix[:, :, :, :] = state_update
+        self.s_matrix = state_update
 
         # Formulate output linear projections over the freshly mutated state
         s_matrix_updated = self.s_matrix.view(

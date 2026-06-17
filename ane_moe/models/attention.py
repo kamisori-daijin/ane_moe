@@ -173,10 +173,11 @@ class Qwen3_5MoeAttention(nn.Module):
 
 
         k_cache_update = (k_rotated * mask_4d) + (self.k_cache * (1.0 - mask_4d))
-        self.k_cache[:, :, :, :] = k_cache_update.contiguous()
-
+        #self.k_cache[:, :, :, :] = k_cache_update.contiguous()
+        self.k_cache = k_cache_update.contiguous()
         v_cache_update = (v_states * mask_4d) + (self.v_cache * (1.0 - mask_4d))
-        self.v_cache[:, :, :, :] = v_cache_update.contiguous()
+        #self.v_cache[:, :, :, :] = v_cache_update.contiguous()
+        self.v_cache = v_cache_update.contiguous()
 
         # 4D-Native GQA Broadcast expansions inside hardware SRAM
        

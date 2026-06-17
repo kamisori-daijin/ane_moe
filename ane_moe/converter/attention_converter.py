@@ -1,9 +1,12 @@
 import os
-
-import coremltools as ct
+from pathlib import Path
+from pyexpat import model
 import numpy as np
 import torch
 import torch.nn.functional as F
+import coreai_torch
+from coreai_torch import TorchConverter
+from coreai_opt.casting import cast_to_16_bit_precision
 
 
 # ======================================================================
@@ -125,7 +128,7 @@ def load_weights_into_full_attention(ane_attn_module, hf_layer_state_dict, layer
 # 3. CoreML Unified Attention Pipeline Runner (State-Native Definitive)
 # ======================================================================
 def convert_all_attentions_to_coreml_fp32(
-    hf_state_dict, model_config, layer_idx, output_dir="coreml_attentions", batch_size=1
+    hf_state_dict, model_config, layer_idx, output_dir="coreai_attentions", batch_size=1
 ):
     os.makedirs(output_dir, exist_ok=True)
     hidden_dim = model_config.hidden_size
@@ -153,6 +156,7 @@ def convert_all_attentions_to_coreml_fp32(
                 scratch_attn, hf_state_dict, layer_idx=layer_idx, config=model_config
             )
 
+        
             scratch_attn.float().eval()
             for param in scratch_attn.parameters():
                 param.requires_grad = False
@@ -161,49 +165,45 @@ def convert_all_attentions_to_coreml_fp32(
                 batch_size, 1, hidden_dim, dtype=torch.float32
             )
 
-            print(f"  [Layer {layer_idx}] Tracing loop-free 4D GatedDeltaNet graph...")
-            with torch.no_grad():
-                traced_attn = torch.jit.trace(
-                    scratch_attn, (dummy_hidden_states,), check_trace=False
+            print(f"  [Layer {layer_idx}] Converting GatedDeltaNet graph via CoreAI TorchConverter...")
+
+            coreai_program = (
+                TorchConverter().add_pytorch_module(
+                    model=scratch_attn,
+                  
+                    export_fn=lambda m: torch.export.export(
+                        m, 
+                        args=(dummy_hidden_states,)
+                    ).run_decompositions(
+                        coreai_torch.get_decomp_table() 
+                    ),
+                    input_names=["hidden_states"],
+                    output_names=["o_feat"],
+          
+                    state_names=["s_matrix"]
                 )
-
-            print(
-                f"  [Layer {layer_idx}] Converting GatedDeltaNet JIT graph into CoreML State MLProgram..."
-            )
-            input_features = [
-                ct.TensorType(name="hidden_states", shape=dummy_hidden_states.shape),
-            ]
-
-            # 🌟 CORRECT API SPEC: StateType must wrap a TensorType which defines the inner state structure.
-            state_features = [
-                ct.StateType(
-                    ct.TensorType(shape=scratch_attn.s_matrix_shape, dtype=np.float16),
-                    name="s_matrix",
-                ),
-            ]
-
-            mlmodel = ct.convert(
-                traced_attn,
-                inputs=input_features,
-                states=state_features,
-                compute_units=ct.ComputeUnit.CPU_AND_NE,
-                convert_to="mlprogram",
-                minimum_deployment_target=ct.target.iOS18,
+                .to_coreai()
             )
 
+            print(f"  [Layer {layer_idx}] Executing CoreAI Graph Optimizations for DeltaNet...")
+         
+            coreai_program.optimize()
+
+            
+           
+
+      
             output_path = os.path.join(
-                output_dir, f"qwen3_5_moe_layer_{layer_idx}_gated_deltanet.mlpackage"
+                output_dir, f"qwen3_5_moe_layer_{layer_idx}_gated_deltanet.aimodel"
             )
-            mlmodel.save(output_path)
-            print(
-                f"  🎉 [Layer {layer_idx}] Linear-Attn CoreML State artifact saved straight to disk."
-            )
-        except Exception as e:
-            print(
-                f"    ❌ [Layer {layer_idx}] GatedDeltaNet pipeline raised exception: {e}"
-            )
-            import traceback
+            coreai_program.save_asset(Path(output_path))
+            
+            print(f"  🎉 [Layer {layer_idx}] Linear-Attn CoreAI State asset saved straight to disk.")
+            print(f"     -> Target Path: {output_path}")
 
+        except Exception as e:
+            print(f"    ❌ [Layer {layer_idx}] GatedDeltaNet pipeline raised exception: {e}")
+            import traceback
             traceback.print_exc()
 
     # ------------------------------------------------------------------
@@ -243,59 +243,36 @@ def convert_all_attentions_to_coreml_fp32(
                 1,
                 dtype=torch.float32,
             )
-
-            print(
-                f"  [Layer {layer_idx}] Tracing loop-free 4D Softmax Attention graph..."
-            )
-            with torch.no_grad():
-                traced_attn = torch.jit.trace(
-                    scratch_attn,
-                    (dummy_hidden_states, dummy_current_length, dummy_cos, dummy_sin),
-                    check_trace=False,
+            
+            coreai_program = (
+                TorchConverter().add_pytorch_module(
+                    model=scratch_attn,
+                    export_fn=lambda m: torch.export.export(
+                        m, 
+                        args=(dummy_hidden_states, dummy_current_length, dummy_cos, dummy_sin)
+                    ).run_decompositions(
+                        coreai_torch.get_decomp_table()
+                    ),
+                    input_names=["hidden_states", "current_length", "cos", "sin"],
+                    output_names=["o_feat"],
+                    state_names=["k_cache", "v_cache"]
                 )
-
-            print(
-                f"  [Layer {layer_idx}] Converting Softmax Attention JIT graph into CoreML State MLProgram..."
-            )
-            input_features = [
-                ct.TensorType(name="hidden_states", shape=dummy_hidden_states.shape),
-                ct.TensorType(name="current_length", shape=dummy_current_length.shape),
-                ct.TensorType(name="cos", shape=dummy_cos.shape),
-                ct.TensorType(name="sin", shape=dummy_sin.shape),
-            ]
-
-            # 🌟 CORRECT API SPEC: StateType must wrap a TensorType which defines the inner state structure.
-            state_features = [
-                ct.StateType(
-                    ct.TensorType(shape=scratch_attn.kv_shape, dtype=np.float16),
-                    name="k_cache",
-                ),
-                ct.StateType(
-                    ct.TensorType(shape=scratch_attn.kv_shape, dtype=np.float16),
-                    name="v_cache",
-                ),
-            ]
-
-            mlmodel = ct.convert(
-                traced_attn,
-                inputs=input_features,
-                states=state_features,
-                compute_units=ct.ComputeUnit.CPU_AND_NE,
-                convert_to="mlprogram",
-                minimum_deployment_target=ct.target.iOS18,
+                .to_coreai()
             )
 
-            output_path = os.path.join(
-                output_dir, f"qwen3_5_moe_layer_{layer_idx}_softmax_attention.mlpackage"
-            )
-            mlmodel.save(output_path)
-            print(
-                f"  🎉 [Layer {layer_idx}] Softmax-Attn CoreML State artifact saved straight to disk."
-            )
+        
+            print(f"  [Layer {layer_idx}] Executing CoreAI Graph Optimizations...")
+            coreai_program.optimize()
+
+            #coreai_program = cast_to_16_bit_precision(coreai_program)
+
+            save_file_path = Path(output_dir) / f"qwen3_5_moe_layer_{layer_idx}_softmax_attention.aimodel"
+            coreai_program.save_asset(save_file_path)
+
+            print(f"  🎉 [Layer {layer_idx}] Softmax-Attn CoreAI State asset saved straight to disk.")
+            print(f"     -> Target Path: {save_file_path}")
+
         except Exception as e:
-            print(
-                f"    ❌ [Layer {layer_idx}] Softmax Attention pipeline raised exception: {e}"
-            )
+            print(f"    ❌ [Layer {layer_idx}] CoreAI Attention pipeline raised exception: {e}")
             import traceback
-
             traceback.print_exc()

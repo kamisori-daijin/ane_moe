@@ -2,9 +2,9 @@
 *.pyc
 *.egg-info
 __pycache__
-coreml_experts/
+coreai_experts/
 .DS_Store
-coreml_attentions/
+coreai_attentions/
 coreml_routers/
 coreml_rope/
 coreml_mlps/
