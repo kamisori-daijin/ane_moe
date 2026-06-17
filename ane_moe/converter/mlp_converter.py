@@ -22,7 +22,7 @@ def convert_single_mlp_to_coreml(
         target_prefix = f"model.language_model.layers.{layer_idx}.mlp.shared_expert."
     else:
         # Standard fully connected MLP layer (for regular layers, not MoE)
-        intermediate_size = getattr(model_config, "intermediate_size", 2048) # 通常層のサイズがあれば
+        intermediate_size = getattr(model_config, "intermediate_size", 2048) 
         target_prefix = f"model.language_model.layers.{layer_idx}.mlp."
 
     scratch_mlp = Qwen3_5MoeMLPANE(model_config, intermediate_size=intermediate_size)
@@ -68,21 +68,16 @@ def convert_single_mlp_to_coreml(
         #finalized_model = palettizer.finalize(backend=opt.ExportBackend.CoreAI)
         #cast_to_16_bit_precision(scratch_mlp)
 
-        with torch.no_grad():
-            exported = torch.export.export(scratch_mlp, args=(dummy_hidden_states_fp16,))
-            
-            exported = exported.run_decompositions(coreai_torch.get_decomp_table())
 
      
-        coreai_program = (
-            TorchConverter()
-            .add_exported_program(
-                exported_program=exported,
-                input_names=["hidden_states"],
-                output_names=["mlp_out"] 
-            )
-            .to_coreai()
+        converter = TorchConverter().add_pytorch_module(
+            scratch_mlp,
+            export_fn=lambda m: torch.export.export(m, args=(dummy_hidden_states,)).run_decompositions(
+                coreai_torch.get_decomp_table()
+            ),
         )
+        coreai_program = converter.to_coreai()
+        coreai_program.optimize()
 
         print(f"  [Layer {layer_idx}] Executing CoreAI Graph Optimizations for MLP...")
         coreai_program.optimize()
