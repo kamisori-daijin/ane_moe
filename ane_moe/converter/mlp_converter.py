@@ -1,8 +1,12 @@
 import os
+from pathlib import Path
 import torch
-import numpy as np
-import coremltools as ct
+import coreai_torch
+from coreai_torch import TorchConverter
 from ane_moe.models.mlp import Qwen3_5MoeMLPANE
+from coreai_opt.palettization import KMeansPalettizer, KMeansPalettizerConfig
+from coreai_opt.casting import cast_to_16_bit_precision
+import coreai_opt as opt
 
 
 def convert_single_mlp_to_coreml(
@@ -43,37 +47,58 @@ def convert_single_mlp_to_coreml(
             print(f"    ⚠️ [Weight Loader Skip] Target keys missing for layer {layer_idx} ({prefix_type})")
             return
 
-    scratch_mlp.float().eval()
+    scratch_mlp.half().eval()
     for param in scratch_mlp.parameters():
         param.requires_grad = False
 
-   
-    dummy_hidden_states = torch.randn(1, 512, model_config.hidden_size, dtype=torch.float32)
+    
+    dummy_hidden_states = torch.randn(1, 512, model_config.hidden_size, dtype=torch.float16)
 
     print(f"  [Layer {layer_idx} - {prefix_type}] Tracing loop-free 4D MLP graph...")
-    with torch.no_grad():
-        traced_mlp = torch.jit.trace(scratch_mlp, (dummy_hidden_states,), check_trace=False)
 
     print(f"  [Layer {layer_idx} - {prefix_type}] Converting MLP JIT graph into CoreML State MLProgram...")
 
-    # 3. CoreML input type definition
-    input_features = [
-        ct.TensorType(name="hidden_states", shape=dummy_hidden_states.shape, dtype=np.float32)
-    ]
+    try: 
+        dummy_hidden_states_fp16 = dummy_hidden_states.half()
+        #config = KMeansPalettizerConfig.presets.w4()
+        #palettizer = KMeansPalettizer(scratch_mlp, config)
+        #prepared_model = palettizer.prepare(dummy_hidden_states)
+        #prepared_model = scratch_mlp
+        
+        #finalized_model = palettizer.finalize(backend=opt.ExportBackend.CoreAI)
+        #cast_to_16_bit_precision(scratch_mlp)
 
-    
-    mlmodel = ct.convert(
-        traced_mlp,
-        inputs=input_features,
-        compute_units=ct.ComputeUnit.CPU_AND_NE, 
-        convert_to="mlprogram",
-        minimum_deployment_target=ct.target.iOS18,
-    )
+        with torch.no_grad():
+            exported = torch.export.export(scratch_mlp, args=(dummy_hidden_states_fp16,))
+            
+            exported = exported.run_decompositions(coreai_torch.get_decomp_table())
 
-    
-    suffix = "shared_expert" if prefix_type == "shared_expert" else "dense_mlp"
-    output_package_path = os.path.join(output_dir, f"mlp_{suffix}_layer_{layer_idx}")
-    mlmodel.save(output_package_path)
-    print(f"  🎉 [Layer {layer_idx}] MLP ({prefix_type}) CoreML artifact saved to disk.")
+     
+        coreai_program = (
+            TorchConverter()
+            .add_exported_program(
+                exported_program=exported,
+                input_names=["hidden_states"],
+                output_names=["mlp_out"] 
+            )
+            .to_coreai()
+        )
+
+        print(f"  [Layer {layer_idx}] Executing CoreAI Graph Optimizations for MLP...")
+        coreai_program.optimize()
+
+        suffix = "shared_expert" if prefix_type == "shared_expert" else "dense_mlp"
+        output_asset_path = os.path.join(output_dir, f"mlp_{suffix}_layer_{layer_idx}.aimodel")
+        
+     
+        coreai_program.save_asset(Path(output_asset_path))
+        
+        print(f"  🎉 [Layer {layer_idx}] MLP ({prefix_type}) CoreAI asset saved straight to disk.")
+        print(f"     -> Target Path: {output_asset_path}")
+
+    except Exception as e:
+        print(f"    ❌ [Layer {layer_idx}] MLP ({prefix_type}) pipeline raised exception: {e}")
+        import traceback
+        traceback.print_exc()
 
 

@@ -7,7 +7,7 @@ from transformers import AutoConfig
 from safetensors.torch import load_file
 
 def run_mlp_generation_pipeline(
-    model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreml_mlps"
+    model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreai_mlps"
 ):
     """
     Scans the Hugging Face local cache snapshot repo, determines MLP / Shared Expert maps,
@@ -128,5 +128,5 @@ if __name__ == "__main__":
     TARGET_MODEL = "Qwen/Qwen3.5-35B-A3B"
 
     run_mlp_generation_pipeline(
-        model_id=TARGET_MODEL, base_output_workspace="coreml_mlps"
+        model_id=TARGET_MODEL, base_output_workspace="coreai_mlps"
     )
