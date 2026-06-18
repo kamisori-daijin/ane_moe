@@ -15,7 +15,7 @@ compiled_model/
 coreai_lm_head_split/
 tokenizer/
 tmp.py
-
+all_model/
 .DS_Store
 .AppleDouble
 .LSOverride
