@@ -4,11 +4,11 @@ import glob
 import torch
 from transformers import AutoConfig
 from safetensors.torch import load_file
-from ane_moe.converter.router_converter import convert_router_to_coreml
+from ane_moe.converter.router_converter import convert_router_to_coreai
 
 
 def run_router_generation_pipeline(
-    model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreml_routers"
+    model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreai_routers"
 ):
     """
     Scans the Hugging Face local cache snapshot repo, determines router weight maps,
@@ -109,7 +109,7 @@ def run_router_generation_pipeline(
                             layer_state_dict[k] = v
                     del partial_dict
 
-                convert_router_to_coreml(
+                convert_router_to_coreai(
                     hf_state_dict=layer_state_dict,
                     model_config=config,
                     layer_idx=layer_idx,
@@ -118,8 +118,7 @@ def run_router_generation_pipeline(
                 )
 
                 del layer_state_dict
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+              
             else:
                 print(
                     f"  [Skip Layer {layer_idx}] Router weight nodes missing inside map indices schema arrays."
@@ -136,7 +135,7 @@ def run_router_generation_pipeline(
                 base_output_workspace, f"layer_{layer_idx}"
             )
             
-            convert_router_to_coreml(
+            convert_router_to_coreai(
                 hf_state_dict=layer_state_dict,
                 model_config=config,
                 layer_idx=layer_idx,
@@ -145,10 +144,10 @@ def run_router_generation_pipeline(
             )
 
 
-# ⭕ インデントを左端に揃えて修正完了
+
 if __name__ == "__main__":
     TARGET_MODEL = "Qwen/Qwen3.5-35B-A3B"
 
     run_router_generation_pipeline(
-        model_id=TARGET_MODEL, base_output_workspace="coreml_routers"
+        model_id=TARGET_MODEL, base_output_workspace="coreai_routers"
     )

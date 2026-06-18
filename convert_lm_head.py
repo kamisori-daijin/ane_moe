@@ -3,10 +3,13 @@ import json
 import glob
 import torch
 import torch.nn as nn
-import numpy as np
-import coremltools as ct
+import coreai_opt as opt
+from coreai_opt.palettization import KMeansPalettizer, KMeansPalettizerConfig
+import coreai_torch
+from coreai_torch import TorchConverter
 from transformers import AutoConfig
 from safetensors.torch import load_file
+from pathlib import Path
 
 class Qwen3_5MoeSplitLMHeadANE(nn.Module):
     """
@@ -39,7 +42,7 @@ class Qwen3_5MoeSplitLMHeadANE(nn.Module):
         return outputs
 
 
-def convert_split_lm_head_to_coreml(model_id="Qwen/Qwen3.5-35B-A3B", output_dir="coreml_lm_head_split"):
+def convert_split_lm_head_to_coreml(model_id="Qwen/Qwen3.5-35B-A3B", output_dir="coreai_lm_head_split"):
     os.makedirs(output_dir, exist_ok=True)
     home_dir = os.path.expanduser("~")
     formatted_model_id = f"models--{model_id.replace('/', '--')}"
@@ -80,7 +83,7 @@ def convert_split_lm_head_to_coreml(model_id="Qwen/Qwen3.5-35B-A3B", output_dir=
             start_idx = end_idx
         print("  🎉 [Weight Loader] All 16 split lm_head matrix nodes bound successfully!")
 
-    split_lm_head.float().eval()
+    split_lm_head.half().eval()
     for param in split_lm_head.parameters(): param.requires_grad = False
 
     # 3. Serialize into 16 separate CoreML models to bypass compiler and memory limits
@@ -98,23 +101,24 @@ def convert_split_lm_head_to_coreml(model_id="Qwen/Qwen3.5-35B-A3B", output_dir=
         single_head = SingleHeadWrapper(split_lm_head.heads[i])
         
         # 4D input format: [1, hidden_dim, 1, 1]
-        dummy_input = torch.randn(1, hidden_dim, 1, 1, dtype=torch.float32)
-        traced = torch.jit.trace(single_head, (dummy_input,), check_trace=False)
+        dummy_input = (torch.randn(1, hidden_dim, 1, 1, dtype=torch.float16),)
+        config = KMeansPalettizerConfig.presets.w8()
         
-        input_features = [ct.TensorType(name="hidden_states", shape=dummy_input.shape, dtype=np.float32)]
-        
-        # Compile each chunk targeting CPU and GPU/ANE
-        mlmodel = ct.convert(
-            traced,
-            inputs=input_features,
-            compute_units=ct.ComputeUnit.CPU_AND_GPU,
-            convert_to="mlprogram",
-            minimum_deployment_target=ct.target.iOS18
+        # palettize weights in the model with the config
+        palettizer = KMeansPalettizer(single_head, config)
+        prepared_model = palettizer.prepare(dummy_input)
+        finalized_model = palettizer.finalize(backend=opt.ExportBackend.CoreAI)
+        converter = TorchConverter().add_pytorch_module(
+            finalized_model,
+            export_fn=lambda m: torch.export.export(m, args=dummy_input).run_decompositions(
+                coreai_torch.get_decomp_table()
+            ),
         )
-        
-        # Save individual packages locally (e.g., lm_head_chunk_1.mlpackage)
-        output_package_path = os.path.join(output_dir, f"lm_head_chunk_{i+1}")
-        mlmodel.save(output_package_path)
+        coreai_program = converter.to_coreai()
+        coreai_program.optimize()
+        # Save individual packages locally (e.g., lm_head_chunk_1.aipackage)
+        output_package_path = os.path.join(output_dir, f"lm_head_chunk_{i+1}.aimodel")
+        coreai_program.save_asset(Path(output_package_path))
         print(f"  🎉 Saved: {output_package_path}")
 
 if __name__ == "__main__":

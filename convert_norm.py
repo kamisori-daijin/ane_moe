@@ -4,8 +4,11 @@ import glob
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import coremltools as ct
+from pathlib import Path
+import coreai_opt as opt
+from coreai_opt.palettization import KMeansPalettizer, KMeansPalettizerConfig
+import coreai_torch
+from coreai_torch import TorchConverter
 from transformers import AutoConfig
 from safetensors.torch import load_file
 
@@ -70,36 +73,36 @@ def convert_decoder_norms_to_coreml(hf_layer_state_dict, model_config, layer_idx
                 print(f"    ⚠️ [Weight Loader Missing] {target_key} not found. Skipping.")
                 continue
 
-        scratch_norm.float().eval()
+        scratch_norm.half().eval()
         for param in scratch_norm.parameters():
             param.requires_grad = False
 
         # Dummy input [1, 4096, 1, 1]
-        dummy_input = torch.randn(1, hidden_dim, 1, 1, dtype=torch.float32)
+        dummy_input = (torch.randn(1, hidden_dim, 1, 1, dtype=torch.float16),)
 
         print(f"  [Layer {layer_idx} - {norm_type}] Tracing loop-free 4D RMSNorm graph...")
-        with torch.no_grad():
-            traced_norm = torch.jit.trace(scratch_norm, (dummy_input,), check_trace=False)
 
         print(f"  [Layer {layer_idx} - {norm_type}] Converting JIT graph into CoreML State MLProgram...")
+        config = KMeansPalettizerConfig.presets.w8()
         
-        input_features = [
-            ct.TensorType(name="x", shape=dummy_input.shape, dtype=np.float32)
-        ]
-
-        mlmodel = ct.convert(
-            traced_norm,
-            inputs=input_features,
-            compute_units=ct.ComputeUnit.CPU_AND_NE,
-            convert_to="mlprogram",
-            minimum_deployment_target=ct.target.iOS18,
+        # palettize weights in the model with the config
+        palettizer = KMeansPalettizer(scratch_norm, config)
+        prepared_model = palettizer.prepare(dummy_input)
+        finalized_model = palettizer.finalize(backend=opt.ExportBackend.CoreAI)
+        converter = TorchConverter().add_pytorch_module(
+            finalized_model,
+            export_fn=lambda m: torch.export.export(m, args=dummy_input).run_decompositions(
+                coreai_torch.get_decomp_table()
+            ),
         )
+        coreai_program = converter.to_coreai()
+        coreai_program.optimize()
 
-        output_package_path = os.path.join(output_dir, f"norm_{norm_type}_layer_{layer_idx}")
-        mlmodel.save(output_package_path)
+        output_package_path = os.path.join(output_dir, f"norm_{norm_type}_layer_{layer_idx}.aimodel")
+        coreai_program.save_asset(Path(output_package_path))
         print(f"  🎉 [Layer {layer_idx}] {norm_type} CoreML artifact saved to disk.\n")
         
-def run_norms_generation_pipeline(model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreml_norms"):
+def run_norms_generation_pipeline(model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreai_norms"):
     """
     Automatically extracts and serializes RMSNorm weights across all layers, 
     utilizing the identical loader loop architecture used for Attention and Router.
@@ -163,4 +166,4 @@ def run_norms_generation_pipeline(model_id="Qwen/Qwen3.5-35B-A3B", base_output_w
 
 if __name__ == "__main__":
     TARGET_MODEL = "Qwen/Qwen3.5-35B-A3B" 
-    run_norms_generation_pipeline(model_id=TARGET_MODEL, base_output_workspace="coreml_norms")
+    run_norms_generation_pipeline(model_id=TARGET_MODEL, base_output_workspace="coreai_norms")
