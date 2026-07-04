@@ -54,7 +54,7 @@ public final class MLPContainer: @unchecked Sendable {
         layerIndex: Int
     ) async throws -> NDArray {
         guard let function = layers[layerIndex],
-              var outputTensor = mlpOutputs[layerIndex] else {
+              let outputTensor = mlpOutputs[layerIndex] else {
             return inputTensor
         }
         
@@ -63,18 +63,20 @@ public final class MLPContainer: @unchecked Sendable {
         
         var mutableViews = InferenceFunction.MutableViews()
         
-        
-        let mutableView = outputTensor.mutableView(as: Float16.self)
+  
+        var targetTensor = outputTensor
+        let mutableView = targetTensor.mutableView(as: Float16.self)
         mutableViews.insert(mutableView, for: outputKey)
         
         let emptyStates = InferenceFunction.MutableViews()
         
+   
         _ = try await function.run(
             inputs: inputs,
             states: emptyStates,
             outputViews: mutableViews
         )
-        
-        return outputTensor
+       
+        return targetTensor
     }
 }

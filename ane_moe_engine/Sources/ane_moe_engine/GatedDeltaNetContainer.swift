@@ -64,30 +64,37 @@ public final class GatedDeltaNetContainer: Sendable {
     ///   - states: The mutable state collection containing recurrent state matrices (s_matrix), passed as `consuming`.
     ///   - outputViews: The pre-allocated output backings to prevent allocation overhead, passed as `consuming`.
     public func forward(
-        _ inputTensor: NDArray,
-        layerIndex: Int,
-        states: consuming InferenceFunction.MutableViews,
-        outputViews: consuming InferenceFunction.MutableViews
-    ) async throws -> InferenceFunction.Outputs {
-        guard let function = layerFunctions[layerIndex] else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-        
+         _ inputTensor: NDArray,
+         layerIndex: Int
+     ) async throws -> NDArray {
+         guard let function = layerFunctions[layerIndex],
+               let outputArray = deltaNetOutputs[layerIndex] else {
+             throw CocoaError(.fileNoSuchFile)
+         }
+         
+         let inputs: [String: NDArray] = [
+             "hidden_states": inputTensor
+         ]
+         
+         let outputKey = function.descriptor.outputNames.first ?? "output"
+         
+         var mutableViews = InferenceFunction.MutableViews()
+         var targetTensor = outputArray
+         let mutableView = targetTensor.mutableView(as: Float32.self)
+         mutableViews.insert(mutableView, for: outputKey)
+         
+         
+         let emptyStates = InferenceFunction.MutableViews()
+         
+         _ = try await function.run(
+             inputs: inputs,
+             states: emptyStates,
+             outputViews: mutableViews
+         )
+         
+         return targetTensor
+     }
      
-        let inputs: [String: NDArray] = [
-            "hidden_states": inputTensor
-        ]
-        
-   
-        let outputs = try await function.run(
-            inputs: inputs,
-            states: states,
-            outputViews: outputViews
-        )
-        
-        return outputs
-    }
-    
-    public func functionView(forLayer layerIdx: Int) -> InferenceFunction? { layerFunctions[layerIdx] }
-    public func outputView(forLayer layerIdx: Int) -> NDArray? { deltaNetOutputs[layerIdx] }
-}
+     public func functionView(forLayer layerIdx: Int) -> InferenceFunction? { layerFunctions[layerIdx] }
+     public func outputView(forLayer layerIdx: Int) -> NDArray? { deltaNetOutputs[layerIdx] }
+ }

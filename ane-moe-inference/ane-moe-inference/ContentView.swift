@@ -188,22 +188,25 @@ struct ContentView: View {
         
         logText += "\n[Projecting Zero-Copy Memory View for Token ID: \(firstTokenID)]"
         
-        // The new EmbeddingContainer provides a true IOSurface-backed MLMultiArray with shape [2048 x 1].
+        // The new EmbeddingContainer provides a true NDArray.
         guard let hiddenStatesStream = embedding.embeddingView(forTokenID: firstTokenID) else {
-            logText += "\n❌ [Memory Error] Failed to project Anemll-style hardware tensor backing."
+            logText += "\n❌ [Memory Error] Failed to project hardware tensor backing."
             return
         }
         
-        logText += "\n🎉 [SUCCESS] True IOSurface MLMultiArray Tracking Register initialized successfully."
+        logText += "\n🎉 [SUCCESS] True NDArray Tracking Register initialized successfully."
         logText += "\n➔ Executing 40 interleaved blocks sequentially via master graph..."
         
         Task {
             do {
                 let currentStep = 0 // Initial autoregressive step
                 
+            
+                var mutableHiddenStates = hiddenStatesStream
+                
                 // Run the master pipeline with the hardware-backed tensor through all 40 layers
                 let resolvedOutputTensor = try await pipeline.evaluateSingleStep(
-                    hiddenStatesStream,
+                    &mutableHiddenStates,
                     currentStep: currentStep
                 )
                 
@@ -211,7 +214,6 @@ struct ContentView: View {
                     logText += "\n\n=================================================================="
                     logText += "\n⚡ [CIRCUIT SPARK SUCCESS] Full 40-layer topology traversed!"
                     logText += "\n➔ Output Tensor Backing Reference: \(resolvedOutputTensor)"
-                    logText += "\n➔ Element Layout Count: \(resolvedOutputTensor.count) variables verified"
                     logText += "\n➔ Memory Allocation: 100% Conserved via Unified Memory Ping-Pong"
                     logText += "\n\n🔮 Ready to plug Language Model Head (LM Head) for next-token sampling!"
                 }

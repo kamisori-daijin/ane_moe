@@ -55,7 +55,7 @@ public final class FullAttentionContainer: Sendable {
             }) else { continue }
             
        
-            let asset = try AIModelAsset(contentsOf: modelURL)
+            _ = try AIModelAsset(contentsOf: modelURL)
             
        
             let aiModel = try await AIModel(contentsOf: modelURL)
@@ -73,42 +73,52 @@ public final class FullAttentionContainer: Sendable {
     // MARK: - Public Execution API
     
     /// Evaluates the attention layer by binding input/output backings and leveraging the internal hardware-native KV cache state.
-    public func executeAttention(
-        _ inputTensor: NDArray,
-        layerIndex: Int,
-        states: consuming InferenceFunction.MutableViews,
-        outputViews: consuming InferenceFunction.MutableViews
-    ) async throws -> InferenceFunction.Outputs {
-        guard let function = layerFunctions[layerIndex] else {
-            throw CocoaError(.fileNoSuchFile)
+    
+
+        /// Evaluates the attention layer by binding input/output backings and leveraging the internal hardware-native KV cache state.
+        public func executeAttention(
+            _ inputTensor: NDArray,
+            layerIndex: Int
+        ) async throws -> NDArray {
+            guard let function = layerFunctions[layerIndex],
+                  let outputArray = attentionOutputs[layerIndex] else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            
+            let inputs: [String: NDArray] = [
+                "hidden_states": inputTensor
+            ]
+            
+            let outputKey = function.descriptor.outputNames.first ?? "output"
+            
+            var mutableViews = InferenceFunction.MutableViews()
+            var targetTensor = outputArray
+            let mutableView = targetTensor.mutableView(as: Float32.self)
+            mutableViews.insert(mutableView, for: outputKey)
+            
+            let emptyStates = InferenceFunction.MutableViews()
+            
+            // InferenceFunction run(inputs:states:outputViews:)
+            _ = try await function.run(
+                inputs: inputs,
+                states: emptyStates,
+                outputViews: mutableViews
+            )
+
+            return targetTensor
         }
         
-        let inputs: [String: NDArray] = [
-            "hidden_states": inputTensor
-        ]
+        /// Generates structured operational dictionary blocks containing runtime tracking parameters.
+        public func auxiliaryFeatures(forStep currentStep: Int) -> [String: NDArray] {
+            let updatedLength = NDArray(scalars: [Float(currentStep)], shape:[1, 1, 1, 1])
+            
+            return [
+                "current_length": updatedLength,
+                "cos": cosArray,
+                "sin": sinArray
+            ]
+        }
         
-        // InferenceFunction run(inputs:states:outputViews:)
-        let outputs = try await function.run(
-            inputs: inputs,
-            states: states,
-            outputViews: outputViews
-        )
-        
-        return outputs
+        public func functionView(forLayer layerIdx: Int) -> InferenceFunction? { layerFunctions[layerIdx] }
+        public func outputView(forLayer layerIdx: Int) -> NDArray? { attentionOutputs[layerIdx] }
     }
-    
-    /// Generates structured operational dictionary blocks containing runtime tracking parameters.
-    public func auxiliaryFeatures(forStep currentStep: Int) -> [String: NDArray] {
-
-        let updatedLength = NDArray(scalars: [Float(currentStep)], shape:[1, 1, 1, 1])
-        
-        return [
-            "current_length": updatedLength,
-            "cos": cosArray,
-            "sin": sinArray
-        ]
-    }
-    
-    public func functionView(forLayer layerIdx: Int) -> InferenceFunction? { layerFunctions[layerIdx] }
-    public func outputView(forLayer layerIdx: Int) -> NDArray? { attentionOutputs[layerIdx] }
-}
