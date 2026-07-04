@@ -11,7 +11,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		BF416E142FD1872600DB1B30 /* ane-moe-inference.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ane-moe-inference.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF416E142FD1872600DB1B30 /* ane-moe-inference.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "ane-moe-inference.app"; path = "/Users/kamisori-daijin/Documents/ane-moe/ane-moe-inference/build/Debug/ane-moe-inference.app"; sourceTree = "<absolute>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -38,16 +38,7 @@
 			isa = PBXGroup;
 			children = (
 				BF416E162FD1872600DB1B30 /* ane-moe-inference */,
-				BF416E152FD1872600DB1B30 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		BF416E152FD1872600DB1B30 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				BF416E142FD1872600DB1B30 /* ane-moe-inference.app */,
-			);
-			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -104,7 +95,7 @@
 				BF416E222FD1874B00DB1B30 /* XCLocalSwiftPackageReference "../ane_moe_engine" */,
 			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = BF416E152FD1872600DB1B30 /* Products */;
+			productRefGroup = BF416E0B2FD1872600DB1B30;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
