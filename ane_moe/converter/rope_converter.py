@@ -39,7 +39,7 @@ def convert_rope_to_coreml(model_config, output_dir="coreai_rope"):
     coreai_program = converter.to_coreai()
     coreai_program.optimize()
 
-    output_package_path = os.path.join(output_dir, "qwen3_5_moe_rope.aipackage")
+    output_package_path = os.path.join(output_dir, "qwen3_5_moe_rope.aimodel")
     coreai_program.save_asset(Path(output_package_path))
     print(f"🎉 [RoPE] Rotary Embedding CoreML artifact saved straight to disk at: {output_package_path}")
 
