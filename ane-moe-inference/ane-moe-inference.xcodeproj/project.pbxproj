@@ -10,14 +10,30 @@
 		BF416E242FD1874B00DB1B30 /* ane_moe_engine in Frameworks */ = {isa = PBXBuildFile; productRef = BF416E232FD1874B00DB1B30 /* ane_moe_engine */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		BFC50DDC2FFBB29C00D6790A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BF416E0C2FD1872600DB1B30 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BF416E132FD1872600DB1B30;
+			remoteInfo = "ane-moe-inference";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		BF416E142FD1872600DB1B30 /* ane-moe-inference.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "ane-moe-inference.app"; path = "/Users/kamisori-daijin/Documents/ane-moe/ane-moe-inference/build/Debug/ane-moe-inference.app"; sourceTree = "<absolute>"; };
+		BFC50DD82FFBB29C00D6790A /* ane-moe-inferenceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "ane-moe-inferenceTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		BF416E162FD1872600DB1B30 /* ane-moe-inference */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "ane-moe-inference";
+			sourceTree = "<group>";
+		};
+		BFC50DD92FFBB29C00D6790A /* ane-moe-inferenceTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "ane-moe-inferenceTests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +47,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BFC50DD52FFBB29C00D6790A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +61,8 @@
 			isa = PBXGroup;
 			children = (
 				BF416E162FD1872600DB1B30 /* ane-moe-inference */,
+				BFC50DD82FFBB29C00D6790A /* ane-moe-inferenceTests.xctest */,
+				BFC50DD92FFBB29C00D6790A /* ane-moe-inferenceTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -67,6 +92,29 @@
 			productReference = BF416E142FD1872600DB1B30 /* ane-moe-inference.app */;
 			productType = "com.apple.product-type.application";
 		};
+		BFC50DD72FFBB29C00D6790A /* ane-moe-inferenceTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BFC50DDE2FFBB29C00D6790A /* Build configuration list for PBXNativeTarget "ane-moe-inferenceTests" */;
+			buildPhases = (
+				BFC50DD42FFBB29C00D6790A /* Sources */,
+				BFC50DD52FFBB29C00D6790A /* Frameworks */,
+				BFC50DD62FFBB29C00D6790A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BFC50DDD2FFBB29C00D6790A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				BFC50DD92FFBB29C00D6790A /* ane-moe-inferenceTests */,
+			);
+			name = "ane-moe-inferenceTests";
+			packageProductDependencies = (
+			);
+			productName = "ane-moe-inferenceTests";
+			productReference = BFC50DD82FFBB29C00D6790A /* ane-moe-inferenceTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -74,11 +122,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2650;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					BF416E132FD1872600DB1B30 = {
 						CreatedOnToolsVersion = 26.5;
+					};
+					BFC50DD72FFBB29C00D6790A = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = BF416E132FD1872600DB1B30;
 					};
 				};
 			};
@@ -100,12 +152,20 @@
 			projectRoot = "";
 			targets = (
 				BF416E132FD1872600DB1B30 /* ane-moe-inference */,
+				BFC50DD72FFBB29C00D6790A /* ane-moe-inferenceTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		BF416E122FD1872600DB1B30 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BFC50DD62FFBB29C00D6790A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +182,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BFC50DD42FFBB29C00D6790A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BFC50DDD2FFBB29C00D6790A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BF416E132FD1872600DB1B30 /* ane-moe-inference */;
+			targetProxy = BFC50DDC2FFBB29C00D6790A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		BF416E1D2FD1872600DB1B30 /* Debug */ = {
@@ -317,6 +392,48 @@
 			};
 			name = Release;
 		};
+		BFC50DDF2FFBB29C00D6790A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ZBHSY7VN3Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.kamisori-daijin.ane-moe-inferenceTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ane-moe-inference.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ane-moe-inference";
+			};
+			name = Debug;
+		};
+		BFC50DE02FFBB29C00D6790A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ZBHSY7VN3Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.kamisori-daijin.ane-moe-inferenceTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ane-moe-inference.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ane-moe-inference";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -334,6 +451,15 @@
 			buildConfigurations = (
 				BF416E202FD1872600DB1B30 /* Debug */,
 				BF416E212FD1872600DB1B30 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BFC50DDE2FFBB29C00D6790A /* Build configuration list for PBXNativeTarget "ane-moe-inferenceTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BFC50DDF2FFBB29C00D6790A /* Debug */,
+				BFC50DE02FFBB29C00D6790A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

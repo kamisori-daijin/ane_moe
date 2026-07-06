@@ -40,7 +40,7 @@ public final class Qwen3_5MoePipeline: @unchecked Sendable {
         for layerIndex in stride(from: 3, to: totalLayers, by: 4) { types[layerIndex] = "full_attention" }
         self.layerTypes = types
         
-        self.residualTensor = NDArray(shape: [1, hiddenDimensions, 1, 1], scalarType: .float16)
+        self.residualTensor = NDArray(shape: [1, 1, hiddenDimensions], scalarType: .float16)
     }
 }
 
@@ -59,14 +59,18 @@ extension Qwen3_5MoePipeline {
             
             // 3. Attention Branch
             if layerType == "linear_attention" {
-                hiddenStates = try await stateLoader.forward(normInput, layerIndex: layerIndex)
-            } else {
-                let aux = attentionContainer.auxiliaryFeatures(forStep: step)
-                if var cos = aux["cos"], var sin = aux["sin"], let len = aux["current_length"] {
-                    try await ropeContainer.computeRoPE(currentLengthBuffer: len, destinationCos: &cos, destinationSin: &sin)
-                }
-                hiddenStates = try await attentionContainer.executeAttention(normInput, layerIndex: layerIndex)
-            }
+                    hiddenStates = try await stateLoader.forward(normInput, layerIndex: layerIndex)
+                } else {
+                            let aux = attentionContainer.auxiliaryFeatures(forStep: step)
+                            if var cos = aux["cos"], var sin = aux["sin"], let len = aux["current_length"] {
+                                try await ropeContainer.computeRoPE(currentLengthBuffer: len, destinationCos: &cos, destinationSin: &sin)
+                            }
+                            
+                    var attentionOut = try await attentionContainer.executeAttention(normInput, layerIndex: layerIndex)
+                            
+                           
+                    hiddenStates = try reshapeAndCopy(&attentionOut, toShape: [1, hiddenDimensions, 1, 1])
+                        }
             try accumulateResidual(into: &hiddenStates, source: &mutableResidual)
             
             // 4. FFN Residual Backup
@@ -89,13 +93,23 @@ extension Qwen3_5MoePipeline {
         return hiddenStates
     }
     
+    private func reshapeAndCopy(_ source: inout NDArray, toShape newShape: [Int]) throws -> NDArray {
+        var newTensor = NDArray(shape: newShape, scalarType: .float32)
+            
+        _ = newTensor.mutableView(as: Float32.self)
+        _ = source.mutableView(as: Float32.self)
+            
+            
+            
+            return newTensor
+    }
     private func copyTensor(from source: inout NDArray, to destination: inout NDArray) throws {
-        var dstView = destination.mutableView(as: Float16.self)
-        let srcView = source.mutableView(as: Float16.self)
+        _ = destination.mutableView(as: Float16.self)
+        _ = source.mutableView(as: Float16.self)
     }
     
     private func accumulateResidual(into destination: inout NDArray, source: inout NDArray) throws {
-        var dstView = destination.mutableView(as: Float16.self)
-        let srcView = source.mutableView(as: Float16.self)
+        _ = destination.mutableView(as: Float16.self)
+        _ = source.mutableView(as: Float16.self)
     }
 }
