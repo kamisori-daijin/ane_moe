@@ -15,7 +15,7 @@ public final class EmbeddingContainer: @unchecked Sendable {
     public let hiddenSize: Int
     
     /// Initializes the container with the URL of the `wte.bin` file on disk.
-    public init(contentsOf wteURL: URL, hiddenSize: Int = 4096) throws {
+    public init(contentsOf wteURL: URL, hiddenSize: Int = 2048) throws {
         // Memory-map the file to leverage UMA (Unified Memory Architecture) without high memory overhead.
         self.wteData = try Data(contentsOf: wteURL, options: .mappedIfSafe)
         self.hiddenSize = hiddenSize

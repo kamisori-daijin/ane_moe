@@ -17,7 +17,7 @@ class Qwen3_5MoeDecoderRMSNormANE(nn.Module):
     ANE-optimized RMSNorm completely streamlined for Qwen3.5-35B-A3B layer residual connections.
     Defines the weight as a 1D parameter, ensuring 100% success for weight.copy_ from external loaders.
     """
-    def __init__(self, channels=4096, eps=1e-6):
+    def __init__(self, channels=2048, eps=1e-6):
         super().__init__()
         self.channels = channels
         
@@ -55,7 +55,7 @@ class Qwen3_5MoeDecoderRMSNormANE(nn.Module):
 
 
 def convert_decoder_norms_to_coreml(hf_layer_state_dict, model_config, layer_idx, output_dir):
-    hidden_dim = model_config.hidden_size # 4096
+    hidden_dim = model_config.hidden_size # 2048
     norm_types = ["input_layernorm", "post_attention_layernorm"]
     
     for norm_type in norm_types:
@@ -77,7 +77,7 @@ def convert_decoder_norms_to_coreml(hf_layer_state_dict, model_config, layer_idx
         for param in scratch_norm.parameters():
             param.requires_grad = False
 
-        # Dummy input [1, 4096, 1, 1]
+        # Dummy input [1, 2048, 1, 1]
         dummy_input = (torch.randn(1, hidden_dim, 1, 1, dtype=torch.float16),)
 
         print(f"  [Layer {layer_idx} - {norm_type}] Tracing loop-free 4D RMSNorm graph...")
@@ -100,7 +100,7 @@ def convert_decoder_norms_to_coreml(hf_layer_state_dict, model_config, layer_idx
 
         output_package_path = os.path.join(output_dir, f"norm_{norm_type}_layer_{layer_idx}.aimodel")
         coreai_program.save_asset(Path(output_package_path))
-        print(f"  🎉 [Layer {layer_idx}] {norm_type} CoreML artifact saved to disk.\n")
+        print(f"  🎉 [Layer {layer_idx}] {norm_type} CoreAI artifact saved to disk.\n")
         
 def run_norms_generation_pipeline(model_id="Qwen/Qwen3.5-35B-A3B", base_output_workspace="coreai_norms"):
     """

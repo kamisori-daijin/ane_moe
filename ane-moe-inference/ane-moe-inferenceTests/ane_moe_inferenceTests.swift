@@ -12,7 +12,6 @@ import CoreAI
 
 final class PipelineTests: XCTestCase {
     
-    
     @MainActor
     private func selectModelDirectory() async throws -> URL {
         return try await withCheckedThrowingContinuation { continuation in
@@ -42,13 +41,10 @@ final class PipelineTests: XCTestCase {
         guard let inputTensor = embedding.embeddingView(forTokenID: tokenIDs.first!) else { return }
         print("✅ Embedding Shape: \(inputTensor.shape)")
         
-       
-        let reshapedInput = NDArray(shape: [1, 2048, 1, 1], scalarType: .float16)
-       
-        
         let normContainer = try await NormContainer(contentsOf: modelURL, totalLayers: 40)
        
-        let normOutput = try await normContainer.normalize(reshapedInput, layerIndex: 0, isPostAttention: false)
+       
+        let normOutput = try await normContainer.normalize(inputTensor, layerIndex: 0, isPostAttention: false)
         print("✅ Norm Output Shape: \(normOutput.shape)")
     }
 }
