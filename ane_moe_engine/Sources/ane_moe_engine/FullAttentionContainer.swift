@@ -19,7 +19,6 @@ public final class FullAttentionContainer: Sendable {
     public let maxSequenceLength = 512
     public var kvCacheMatrixSize: Int { numKVHeads * headDim * maxSequenceLength } // 2 * 256 * 512 = 262,144
     
-    
     private let layerFunctions: [Int: InferenceFunction]
     private let attentionOutputs: [Int: NDArray]
     
@@ -28,16 +27,24 @@ public final class FullAttentionContainer: Sendable {
     private let cosArray: NDArray
     private let sinArray: NDArray
     
+   
+    private var kCacheArray: NDArray
+    private var vCacheArray: NDArray
+    
     // MARK: - Initialization
     
     public init(contentsOf baseDirectoryURL: URL, totalLayers: Int = 40) async throws {
         self.totalLayers = totalLayers
         
         let fileManager = FileManager.default
-     
+        
         self.currentLengthArray = NDArray(shape:[1, 1, 1, 1], scalarType: .float32)
-        self.cosArray = NDArray(shape:[1, 4096, 1, 1], scalarType: .float32)
-        self.sinArray = NDArray(shape:[1, 4096, 1, 1], scalarType: .float32)
+        self.cosArray = NDArray(shape:[1, 1, 1, 4096], scalarType: .float32)
+        self.sinArray = NDArray(shape:[1, 1, 1, 4096], scalarType: .float32)
+        
+        
+        self.kCacheArray = NDArray(shape: [1, 1, 1, 1], scalarType: .float16)
+        self.vCacheArray = NDArray(shape: [1, 1, 1, 1], scalarType: .float16)
         
         var functions: [Int: InferenceFunction] = [:]
         var outputs: [Int: NDArray] = [:]
@@ -49,20 +56,16 @@ public final class FullAttentionContainer: Sendable {
             let folderContents = try? fileManager.contentsOfDirectory(at: layerFolderURL, includingPropertiesForKeys: nil)
             guard let contents = folderContents else { continue }
             
-           
             guard let modelURL = contents.first(where: {
                 $0.pathExtension == "aimodel" && $0.lastPathComponent.lowercased().contains("softmax_attention")
             }) else { continue }
             
-       
             _ = try AIModelAsset(contentsOf: modelURL)
             
-       
             let aiModel = try await AIModel(contentsOf: modelURL)
-            let function = try aiModel.loadFunction(named: "main") 
+            let function = try aiModel.loadFunction(named: "main")
             functions[layerIdx] = function
             
-         
             outputs[layerIdx] = NDArray(shape: [1, 1, 1, hiddenDimensions], scalarType: .float32)
         }
         
@@ -73,52 +76,50 @@ public final class FullAttentionContainer: Sendable {
     // MARK: - Public Execution API
     
     /// Evaluates the attention layer by binding input/output backings and leveraging the internal hardware-native KV cache state.
-    
-
-        /// Evaluates the attention layer by binding input/output backings and leveraging the internal hardware-native KV cache state.
-        public func executeAttention(
-            _ inputTensor: NDArray,
-            layerIndex: Int
-        ) async throws -> NDArray {
-            guard let function = layerFunctions[layerIndex],
-                  let outputArray = attentionOutputs[layerIndex] else {
-                throw CocoaError(.fileNoSuchFile)
-            }
-            
-            let inputs: [String: NDArray] = [
-                "hidden_states": inputTensor
-            ]
-            
-            let outputKey = function.descriptor.outputNames.first ?? "output"
-            
-            var mutableViews = InferenceFunction.MutableViews()
-            var targetTensor = outputArray
-            let mutableView = targetTensor.mutableView(as: Float32.self)
-            mutableViews.insert(mutableView, for: outputKey)
-            
-            let emptyStates = InferenceFunction.MutableViews()
-            
-            // InferenceFunction run(inputs:states:outputViews:)
-            _ = try await function.run(
-                inputs: inputs,
-                states: emptyStates,
-                outputViews: mutableViews
-            )
-
-            return targetTensor
+    public func executeAttention(
+        _ inputTensor: NDArray,
+        layerIndex: Int
+    ) async throws -> NDArray {
+        guard let function = layerFunctions[layerIndex],
+              let outputArray = attentionOutputs[layerIndex] else {
+            throw CocoaError(.fileNoSuchFile)
         }
         
-        /// Generates structured operational dictionary blocks containing runtime tracking parameters.
-        public func auxiliaryFeatures(forStep currentStep: Int) -> [String: NDArray] {
-            let updatedLength = NDArray(scalars: [Float(currentStep)], shape:[1, 1, 1, 1])
-            
-            return [
-                "current_length": updatedLength,
-                "cos": cosArray,
-                "sin": sinArray
-            ]
-        }
+        let inputs: [String: NDArray] = [
+            "hidden_states": inputTensor
+        ]
         
-        public func functionView(forLayer layerIdx: Int) -> InferenceFunction? { layerFunctions[layerIdx] }
-        public func outputView(forLayer layerIdx: Int) -> NDArray? { attentionOutputs[layerIdx] }
+        let outputKey = function.descriptor.outputNames.first ?? "output"
+        
+        var mutableViews = InferenceFunction.MutableViews()
+        var targetTensor = outputArray
+        let mutableView = targetTensor.mutableView(as: Float32.self)
+        var states = InferenceFunction.MutableViews()
+        states.insert(kCacheArray.mutableView(as: Float16.self), for: "k_cache")
+        states.insert(vCacheArray.mutableView(as: Float16.self), for: "v_cache")
+        mutableViews.insert(mutableView, for: outputKey)
+        
+        // InferenceFunction run(inputs:states:outputViews:)
+        _ = try await function.run(
+            inputs: inputs,
+            states: states,
+            outputViews: mutableViews
+        )
+
+        return targetTensor
     }
+    
+    /// Generates structured operational dictionary blocks containing runtime tracking parameters.
+    public func auxiliaryFeatures(forStep currentStep: Int) -> [String: NDArray] {
+        let updatedLength = NDArray(scalars: [Float(currentStep)], shape:[1, 1, 1, 1])
+        
+        return [
+            "current_length": updatedLength,
+            "cos": cosArray,
+            "sin": sinArray
+        ]
+    }
+    
+    public func functionView(forLayer layerIdx: Int) -> InferenceFunction? { layerFunctions[layerIdx] }
+    public func outputView(forLayer layerIdx: Int) -> NDArray? { attentionOutputs[layerIdx] }
+}

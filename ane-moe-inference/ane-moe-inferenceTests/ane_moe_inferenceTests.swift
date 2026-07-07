@@ -49,7 +49,7 @@ final class PipelineTests: XCTestCase {
         
         let attentionContainer = try await FullAttentionContainer(contentsOf: modelURL, totalLayers: 40)
         
-        let attentionOutput = try await attentionContainer.executeAttention(normOutput, layerIndex: 0)
+        let attentionOutput = try await attentionContainer.executeAttention(normOutput, layerIndex: 39)
         print("✅ Attention Output Shape: \(attentionOutput.shape)")
     }
 }

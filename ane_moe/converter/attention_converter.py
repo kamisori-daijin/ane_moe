@@ -7,6 +7,8 @@ import torch.nn.functional as F
 import coreai_torch
 from coreai_torch import TorchConverter
 from coreai_opt.casting import cast_to_16_bit_precision
+import coreai_opt as opt
+from coreai_opt.palettization import KMeansPalettizer, KMeansPalettizerConfig
 
 
 # ======================================================================
@@ -166,7 +168,12 @@ def convert_all_attentions_to_coreml_fp32(
             )
 
             print(f"  [Layer {layer_idx}] Converting GatedDeltaNet graph via CoreAI TorchConverter...")
-
+            config = KMeansPalettizerConfig.presets.w6()
+            
+            # palettize weights in the model with the config
+            palettizer = KMeansPalettizer(scratch_attn, config)
+            prepared_model = palettizer.prepare((dummy_hidden_states,),)
+            finalized_model = palettizer.finalize(backend=opt.ExportBackend.CoreAI)
             coreai_program = (
                 TorchConverter().add_pytorch_module(
                     model=scratch_attn,
@@ -225,28 +232,34 @@ def convert_all_attentions_to_coreml_fp32(
                 param.requires_grad = False
 
             dummy_hidden_states = torch.randn(
-                batch_size, 1, hidden_dim, dtype=torch.float32
+                1, 1, 1, 2048, dtype=torch.float32
             )
             dummy_current_length = torch.zeros(batch_size, 1, 1, 1, dtype=torch.float32)
 
             dummy_cos = torch.randn(
                 batch_size,
+                1,
+                1,
                 scratch_attn.num_heads * scratch_attn.head_dim,
-                1,
-                1,
                 dtype=torch.float32,
             )
             dummy_sin = torch.randn(
                 batch_size,
+                1,
+                1,
                 scratch_attn.num_heads * scratch_attn.head_dim,
-                1,
-                1,
                 dtype=torch.float32,
             )
+            config = KMeansPalettizerConfig.presets.w6()
+            
+            # palettize weights in the model with the config
+            palettizer = KMeansPalettizer(scratch_attn, config)
+            prepared_model = palettizer.prepare((dummy_hidden_states, dummy_current_length, dummy_cos, dummy_sin),)
+            finalized_model = palettizer.finalize(backend=opt.ExportBackend.CoreAI)
             
             coreai_program = (
                 TorchConverter().add_pytorch_module(
-                    model=scratch_attn,
+                    model=finalized_model,
                     export_fn=lambda m: torch.export.export(
                         m, 
                         args=(dummy_hidden_states, dummy_current_length, dummy_cos, dummy_sin)
