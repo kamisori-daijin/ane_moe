@@ -33,7 +33,7 @@ public final class NormContainer: @unchecked Sendable {
               let aiModel = try await AIModel(contentsOf: inputNormURL)
               if let function = try aiModel.loadFunction(named: "main") {
                   self.inputNormLayers[layerIndex] = function
-                  self.inputNormOutputs[layerIndex] = NDArray(shape: [1, hiddenDimensions, 1, 1], scalarType: .float16)
+                  self.inputNormOutputs[layerIndex] = NDArray(shape: [1, 1, 1, hiddenDimensions], scalarType: .float16)
               }
           }
           
@@ -43,7 +43,7 @@ public final class NormContainer: @unchecked Sendable {
               let aiModel = try await AIModel(contentsOf: postNormURL)
               if let function = try aiModel.loadFunction(named: "main") {
                   self.postAttentionNormModels[layerIndex] = function
-                  self.postAttentionNormOutputs[layerIndex] = NDArray(shape: [1, hiddenDimensions, 1, 1], scalarType: .float16)
+                  self.postAttentionNormOutputs[layerIndex] = NDArray(shape: [1, 1, 1, hiddenDimensions], scalarType: .float16)
               }
           }
       }

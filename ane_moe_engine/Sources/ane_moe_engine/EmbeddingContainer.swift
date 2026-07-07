@@ -31,7 +31,7 @@ public final class EmbeddingContainer: @unchecked Sendable {
         guard tokenOffset + byteStride <= wteData.count else { return nil }
         
         // Match the 4D shape expected by the model to prevent validation errors
-        let tensorShape = [1, hiddenSize, 1, 1]
+        let tensorShape = [1, 1, 1, hiddenSize]
         
         return wteData.withUnsafeBytes { (rawBuffer: UnsafeRawBufferPointer) -> NDArray? in
             guard let baseAddress = rawBuffer.baseAddress else { return nil }

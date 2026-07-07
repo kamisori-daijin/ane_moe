@@ -46,5 +46,10 @@ final class PipelineTests: XCTestCase {
        
         let normOutput = try await normContainer.normalize(inputTensor, layerIndex: 0, isPostAttention: false)
         print("✅ Norm Output Shape: \(normOutput.shape)")
+        
+        let attentionContainer = try await FullAttentionContainer(contentsOf: modelURL, totalLayers: 40)
+        
+        let attentionOutput = try await attentionContainer.executeAttention(normOutput, layerIndex: 0)
+        print("✅ Attention Output Shape: \(attentionOutput.shape)")
     }
 }

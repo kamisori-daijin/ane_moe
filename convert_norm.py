@@ -13,29 +13,20 @@ from transformers import AutoConfig
 from safetensors.torch import load_file
 
 class Qwen3_5MoeDecoderRMSNormANE(nn.Module):
-    """
-    ANE-optimized RMSNorm completely streamlined for Qwen3.5-35B-A3B layer residual connections.
-    Defines the weight as a 1D parameter, ensuring 100% success for weight.copy_ from external loaders.
-    """
     def __init__(self, channels=2048, eps=1e-6):
         super().__init__()
         self.channels = channels
-        
-        # ⭕ Define the weight as a simple 1D parameter [channels], identical to the official model!
-        # This aligns perfectly with the loader's view(-1) copy operation for a 100% flawless bind.
         self.weight = nn.Parameter(torch.zeros(channels, dtype=torch.float32))
         self.variance_epsilon = eps
-
-        # Lock down LayerNorm size by doubling the channel axis dimension (dim=1)
-        self.normalized_shape = [channels * 2, 1, 1]
+        self.normalized_shape = [channels * 2]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Input x is expected to be a 4D tensor structured as [1, channels, 1, 1]
+        # Input x is expected to be [1, 1, 1, channels]
         
-        # ❶ Mirror-flip and concatenate along the channel dimension (dim=1)
-        doubled = torch.cat([x.float(), -x.float()], dim=1)
+        # ❶ Mirror-flip and concatenate along the last dimension (dim=-1)
+        doubled = torch.cat([x.float(), -x.float()], dim=-1)
 
-        # ❷ Execute the ANE-optimized LayerNorm across the channel axis
+        # ❷ Execute LayerNorm across the last axis
         normed_f32 = F.layer_norm(
             doubled,
             self.normalized_shape,
@@ -44,17 +35,17 @@ class Qwen3_5MoeDecoderRMSNormANE(nn.Module):
             self.variance_epsilon,
         )
 
-        # ❸ Slice out exactly the first half corresponding to the original channel size
-        normed_sliced_f32 = normed_f32[:, : self.channels, :, :]
+        # ❸ Slice out exactly the first half
+        normed_sliced_f32 = normed_f32[..., :self.channels]
 
-        # ❹ ⭕ View the 1D weight as [1, C, 1, 1] immediately before computation for safe multiplication!
-        weight_4d = self.weight.view(1, self.channels, 1, 1)
-        output_f32 = normed_sliced_f32 * (1.0 + weight_4d)
+        # ❹ Apply weight
+        weight_1d = self.weight.view(1, 1, 1, self.channels)
+        output_f32 = normed_sliced_f32 * (1.0 + weight_1d)
         
         return output_f32.to(x.dtype)
 
 
-def convert_decoder_norms_to_coreml(hf_layer_state_dict, model_config, layer_idx, output_dir):
+def convert_decoder_norms_to_coreai(hf_layer_state_dict, model_config, layer_idx, output_dir):
     hidden_dim = model_config.hidden_size # 2048
     norm_types = ["input_layernorm", "post_attention_layernorm"]
     
@@ -77,12 +68,12 @@ def convert_decoder_norms_to_coreml(hf_layer_state_dict, model_config, layer_idx
         for param in scratch_norm.parameters():
             param.requires_grad = False
 
-        # Dummy input [1, 2048, 1, 1]
-        dummy_input = (torch.randn(1, hidden_dim, 1, 1, dtype=torch.float16),)
+        # Dummy input [1, 1, 1, 2048]
+        dummy_input = (torch.randn(1, 1, 1, hidden_dim, dtype=torch.float16),)
 
         print(f"  [Layer {layer_idx} - {norm_type}] Tracing loop-free 4D RMSNorm graph...")
 
-        print(f"  [Layer {layer_idx} - {norm_type}] Converting JIT graph into CoreML State MLProgram...")
+        print(f"  [Layer {layer_idx} - {norm_type}] Converting JIT graph into CoreAI AIProgram...")
         config = KMeansPalettizerConfig.presets.w8()
         
         # palettize weights in the model with the config
@@ -154,7 +145,7 @@ def run_norms_generation_pipeline(model_id="Qwen/Qwen3.5-35B-A3B", base_output_w
                 del partial_dict
             
             # Execute RMSNorm-specific conversion pipeline
-            convert_decoder_norms_to_coreml(
+            convert_decoder_norms_to_coreai(
                 hf_layer_state_dict=layer_state_dict,
                 model_config=config,
                 layer_idx=layer_idx,
